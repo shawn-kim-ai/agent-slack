@@ -199,8 +199,6 @@ export function textToRichTextBlocks(
       continue;
     }
 
-    orderedCounts.clear();
-
     // Plain text — collect consecutive non-special lines
     const textLines: string[] = [];
     while (idx < lines.length) {
@@ -218,6 +216,8 @@ export function textToRichTextBlocks(
     }
     const content = textLines.join("\n");
     if (content.trim()) {
+      // Blank lines between items keep a loose list going. Real text ends it.
+      orderedCounts.clear();
       const inlineElements = parseInlineElements(content.endsWith("\n") ? content : `${content}\n`);
       if (hasRichInlineFormatting(inlineElements)) {
         hasFormatting = true;
@@ -269,6 +269,12 @@ function collectList(input: {
       elements: currentItems,
     };
     elements.push(list);
+    // Items at this level end any deeper list, so nested numbering restarts.
+    for (const level of orderedCounts.keys()) {
+      if (level > currentIndent) {
+        orderedCounts.delete(level);
+      }
+    }
     if (currentStyle === "ordered") {
       orderedCounts.set(
         currentIndent,

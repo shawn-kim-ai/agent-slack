@@ -303,6 +303,22 @@ describe("textToRichTextBlocks", () => {
     ]);
   });
 
+  test("blank lines between items keep ordered numbering", () => {
+    const result = textToRichTextBlocks("1. First\n   - detail\n\n2. Second")!;
+    const lists = result[0]!.elements.filter((e) => e.type === "rich_text_list");
+    expect(lists.map((l) => (l as { offset?: number }).offset)).toEqual([undefined, undefined, 1]);
+  });
+
+  test("nested ordered lists restart under a new parent item", () => {
+    const result = textToRichTextBlocks(
+      "- Parent one\n  1. One\n  2. Two\n- Parent two\n  1. One",
+    )!;
+    const ordered = result[0]!.elements.filter(
+      (e) => e.type === "rich_text_list" && (e as { style: string }).style === "ordered",
+    );
+    expect(ordered.map((l) => (l as { offset?: number }).offset)).toEqual([undefined, undefined]);
+  });
+
   test("bold text in list items is parsed", () => {
     const result = textToRichTextBlocks("- *Bold item*\n- Normal item")!;
     expect(result).not.toBeNull();
