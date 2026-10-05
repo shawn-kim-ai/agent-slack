@@ -15,6 +15,7 @@ type RichTextElement =
       type: "rich_text_list";
       style: "bullet" | "ordered";
       indent?: number;
+      offset?: number;
       elements: RichTextListItem[];
     }
   | { type: "rich_text_preformatted"; elements: InlineElement[] }
@@ -145,12 +146,14 @@ export function textToRichTextBlocks(
   let hasLists = false;
   let hasFormatting = false;
   let idx = 0;
+  const orderedCounts = new Map<number, number>();
 
   while (idx < lines.length) {
     const line = lines[idx]!;
 
     // Code block
     if (CODE_BLOCK_START.test(line)) {
+      orderedCounts.clear();
       idx++; // skip opening ```
       const codeLines: string[] = [];
       while (idx < lines.length && !CODE_BLOCK_START.test(lines[idx]!)) {
@@ -171,6 +174,7 @@ export function textToRichTextBlocks(
     // Blockquote
     const quoteMatch = line.match(BLOCKQUOTE_RE);
     if (quoteMatch) {
+      orderedCounts.clear();
       const quoteLines: string[] = [];
       while (idx < lines.length) {
         const qm = lines[idx]!.match(BLOCKQUOTE_RE);
@@ -188,19 +192,14 @@ export function textToRichTextBlocks(
       continue;
     }
 
-    // Bullet list
-    if (BULLET_RE.test(line)) {
+    // List
+    if (BULLET_RE.test(line) || ORDERED_RE.test(line)) {
       hasLists = true;
-      idx = collectList({ lines, startIdx: idx, style: "bullet", pattern: BULLET_RE, elements });
+      idx = collectList({ lines, startIdx: idx, elements, orderedCounts });
       continue;
     }
 
-    // Ordered list
-    if (ORDERED_RE.test(line)) {
-      hasLists = true;
-      idx = collectList({ lines, startIdx: idx, style: "ordered", pattern: ORDERED_RE, elements });
-      continue;
-    }
+    orderedCounts.clear();
 
     // Plain text — collect consecutive non-special lines
     const textLines: string[] = [];
@@ -244,56 +243,64 @@ function hasRichInlineFormatting(elements: InlineElement[]): boolean {
 function collectList(input: {
   lines: string[];
   startIdx: number;
-  style: "bullet" | "ordered";
-  pattern: RegExp;
   elements: RichTextElement[];
+  orderedCounts: Map<number, number>;
 }): number {
-  const { lines, startIdx, style, pattern, elements } = input;
+  const { lines, startIdx, elements, orderedCounts } = input;
   let idx = startIdx;
-
-  // Determine base indent from the first bullet in this group
-  const firstMatch = lines[startIdx]!.match(pattern)!;
+  const firstMatch = lines[startIdx]!.match(BULLET_RE) ?? lines[startIdx]!.match(ORDERED_RE)!;
   const baseIndent = firstMatch[1]!.length;
-
+  let currentStyle: "bullet" | "ordered" | null = null;
   let currentIndent = -1;
   let currentItems: RichTextListItem[] = [];
 
+  const flush = (): void => {
+    if (currentStyle == null || currentItems.length === 0) {
+      return;
+    }
+
+    const list: RichTextElement = {
+      type: "rich_text_list",
+      style: currentStyle,
+      ...(currentIndent > 0 ? { indent: currentIndent } : {}),
+      ...(currentStyle === "ordered" && orderedCounts.has(currentIndent)
+        ? { offset: orderedCounts.get(currentIndent) }
+        : {}),
+      elements: currentItems,
+    };
+    elements.push(list);
+    if (currentStyle === "ordered") {
+      orderedCounts.set(
+        currentIndent,
+        (orderedCounts.get(currentIndent) ?? 0) + currentItems.length,
+      );
+    }
+    currentItems = [];
+  };
+
   while (idx < lines.length) {
-    const match = lines[idx]!.match(pattern);
-    if (!match) {
+    const line = lines[idx]!;
+    const bulletMatch = line.match(BULLET_RE);
+    const orderedMatch = line.match(ORDERED_RE);
+    if (bulletMatch == null && orderedMatch == null) {
       break;
     }
 
-    // Anything significantly deeper (>= baseIndent + 2) is a sub-bullet
+    const style = orderedMatch != null ? "ordered" : "bullet";
+    const match = orderedMatch ?? bulletMatch!;
     const indent = match[1]!.length >= baseIndent + 2 ? 1 : 0;
-    const content = match[2]!;
-
-    if (currentIndent !== -1 && indent !== currentIndent) {
-      elements.push({
-        type: "rich_text_list",
-        style,
-        ...(currentIndent > 0 ? { indent: currentIndent } : {}),
-        elements: currentItems,
-      });
-      currentItems = [];
+    if (currentStyle !== style || currentIndent !== indent) {
+      flush();
+      currentStyle = style;
+      currentIndent = indent;
     }
-
-    currentIndent = indent;
     currentItems.push({
       type: "rich_text_section",
-      elements: parseInlineElements(content),
+      elements: parseInlineElements(match[2]!),
     });
     idx++;
   }
 
-  if (currentItems.length > 0) {
-    elements.push({
-      type: "rich_text_list",
-      style,
-      ...(currentIndent > 0 ? { indent: currentIndent } : {}),
-      elements: currentItems,
-    });
-  }
-
+  flush();
   return idx;
 }

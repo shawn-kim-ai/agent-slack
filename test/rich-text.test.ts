@@ -236,6 +236,73 @@ describe("textToRichTextBlocks", () => {
     expect((list as { style: string }).style).toBe("ordered");
   });
 
+  test("keeps ordered numbering across nested sub-bullets", () => {
+    const result = textToRichTextBlocks(
+      "Intro line\n\n1. Point one?\n   • sub a\n   • sub b\n2. Point two?\n   - sub c",
+    )!;
+    const lists = result[0]!.elements.filter((e) => e.type === "rich_text_list");
+    expect(lists).toEqual([
+      {
+        type: "rich_text_list",
+        style: "ordered",
+        elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "Point one?" }] }],
+      },
+      {
+        type: "rich_text_list",
+        style: "bullet",
+        indent: 1,
+        elements: [
+          { type: "rich_text_section", elements: [{ type: "text", text: "sub a" }] },
+          { type: "rich_text_section", elements: [{ type: "text", text: "sub b" }] },
+        ],
+      },
+      {
+        type: "rich_text_list",
+        style: "ordered",
+        offset: 1,
+        elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "Point two?" }] }],
+      },
+      {
+        type: "rich_text_list",
+        style: "bullet",
+        indent: 1,
+        elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "sub c" }] }],
+      },
+    ]);
+  });
+
+  test("flat ordered lists do not add an offset", () => {
+    const result = textToRichTextBlocks("1. First\n2. Second\n3. Third")!;
+    expect(result[0]!.elements).toEqual([
+      {
+        type: "rich_text_list",
+        style: "ordered",
+        elements: [
+          { type: "rich_text_section", elements: [{ type: "text", text: "First" }] },
+          { type: "rich_text_section", elements: [{ type: "text", text: "Second" }] },
+          { type: "rich_text_section", elements: [{ type: "text", text: "Third" }] },
+        ],
+      },
+    ]);
+  });
+
+  test("ordered lists restart after an intervening paragraph", () => {
+    const result = textToRichTextBlocks("1. First\nParagraph\n1. Restart")!;
+    const lists = result[0]!.elements.filter((e) => e.type === "rich_text_list");
+    expect(lists).toEqual([
+      {
+        type: "rich_text_list",
+        style: "ordered",
+        elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "First" }] }],
+      },
+      {
+        type: "rich_text_list",
+        style: "ordered",
+        elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "Restart" }] }],
+      },
+    ]);
+  });
+
   test("bold text in list items is parsed", () => {
     const result = textToRichTextBlocks("- *Bold item*\n- Normal item")!;
     expect(result).not.toBeNull();
