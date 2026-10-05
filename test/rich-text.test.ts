@@ -311,6 +311,9 @@ describe("textToRichTextBlocks", () => {
         )
         .map((l) => (l as { offset?: number }).offset);
     expect(offsets("1. a\n2. b\n\n1. c")).toEqual([undefined, undefined]);
+    // A "1." after a blank line is read as a restart, like the base behavior.
+    expect(offsets("1. A\n\n1. B\n\n1. C")).toEqual([undefined, undefined, undefined]);
+    expect(offsets("1. A\n\n2. B\n\n3. C")).toEqual([undefined, 1, 2]);
     expect(offsets("3. a\n   - x\n4. b")).toEqual([2, 3]);
     expect(offsets("1. a\n   - x\n1. b")).toEqual([undefined, 1]);
     expect(offsets("1. a\n- b\n1. c")).toEqual([undefined, undefined]);
