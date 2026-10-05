@@ -303,20 +303,23 @@ describe("textToRichTextBlocks", () => {
     ]);
   });
 
-  test("blank lines between items keep ordered numbering", () => {
-    const result = textToRichTextBlocks("1. First\n   - detail\n\n2. Second")!;
-    const lists = result[0]!.elements.filter((e) => e.type === "rich_text_list");
-    expect(lists.map((l) => (l as { offset?: number }).offset)).toEqual([undefined, undefined, 1]);
-  });
-
-  test("nested ordered lists restart under a new parent item", () => {
-    const result = textToRichTextBlocks(
-      "- Parent one\n  1. One\n  2. Two\n- Parent two\n  1. One",
-    )!;
-    const ordered = result[0]!.elements.filter(
-      (e) => e.type === "rich_text_list" && (e as { style: string }).style === "ordered",
-    );
-    expect(ordered.map((l) => (l as { offset?: number }).offset)).toEqual([undefined, undefined]);
+  test("uses the number the author wrote", () => {
+    const offsets = (text: string) =>
+      textToRichTextBlocks(text)![0]!
+        .elements.filter(
+          (e) => e.type === "rich_text_list" && (e as { style: string }).style === "ordered",
+        )
+        .map((l) => (l as { offset?: number }).offset);
+    expect(offsets("1. a\n2. b\n\n1. c")).toEqual([undefined, undefined]);
+    expect(offsets("3. a\n   - x\n4. b")).toEqual([2, 3]);
+    expect(offsets("1. a\n   - x\n1. b")).toEqual([undefined, 1]);
+    expect(offsets("1. a\n- b\n1. c")).toEqual([undefined, undefined]);
+    expect(offsets("1. A\n\n   1. sub\n\n2. B")).toEqual([undefined, undefined, 1]);
+    expect(offsets("1. First\n   - detail\n\n2. Second")).toEqual([undefined, 1]);
+    expect(offsets("- Parent one\n  1. One\n  2. Two\n- Parent two\n  1. One")).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   test("bold text in list items is parsed", () => {

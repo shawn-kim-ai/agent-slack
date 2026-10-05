@@ -253,19 +253,33 @@ function collectList(input: {
   let currentStyle: "bullet" | "ordered" | null = null;
   let currentIndent = -1;
   let currentItems: RichTextListItem[] = [];
+  // The number the author wrote on the first item of the current ordered group.
+  let currentStart = 1;
+  // True until the first group of this run is flushed. A run starts after a
+  // blank line, so a "1." there is a deliberate restart.
+  let firstGroup = true;
 
   const flush = (): void => {
     if (currentStyle == null || currentItems.length === 0) {
       return;
     }
 
+    // Prefer the number the author wrote. A "1." only continues the count when
+    // it follows a nested list in the same run, as in lazily numbered Markdown.
+    let offset = 0;
+    if (currentStyle === "ordered") {
+      if (currentStart > 1) {
+        offset = currentStart - 1;
+      } else if (!firstGroup) {
+        offset = orderedCounts.get(currentIndent) ?? 0;
+      }
+    }
+
     const list: RichTextElement = {
       type: "rich_text_list",
       style: currentStyle,
       ...(currentIndent > 0 ? { indent: currentIndent } : {}),
-      ...(currentStyle === "ordered" && orderedCounts.has(currentIndent)
-        ? { offset: orderedCounts.get(currentIndent) }
-        : {}),
+      ...(offset > 0 ? { offset } : {}),
       elements: currentItems,
     };
     elements.push(list);
@@ -276,12 +290,13 @@ function collectList(input: {
       }
     }
     if (currentStyle === "ordered") {
-      orderedCounts.set(
-        currentIndent,
-        (orderedCounts.get(currentIndent) ?? 0) + currentItems.length,
-      );
+      orderedCounts.set(currentIndent, offset + currentItems.length);
+    } else {
+      // A bullet list at the same level ends the ordered list there.
+      orderedCounts.delete(currentIndent);
     }
     currentItems = [];
+    firstGroup = false;
   };
 
   while (idx < lines.length) {
@@ -299,6 +314,7 @@ function collectList(input: {
       flush();
       currentStyle = style;
       currentIndent = indent;
+      currentStart = orderedMatch != null ? Number.parseInt(line.trim(), 10) : 1;
     }
     currentItems.push({
       type: "rich_text_section",
