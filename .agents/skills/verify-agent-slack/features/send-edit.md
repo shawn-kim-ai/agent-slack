@@ -21,12 +21,13 @@ Preconditions:
 
 - Offline mode uses the fixture and `CI=1`. Live mode requires the coordinator's verified self-DM and a unique tag.
 
-- **Offline guards.** Run `.agents/skills/verify-agent-slack/offline.sh /tmp/agent-slack-evidence/guards-001`. Both CLI targets reject edit, delete, and safe-mode send before any write request. `requests.jsonl` contains only the four reads from the message feature.
+- **Offline guards.** Run `.agents/skills/verify-agent-slack/offline.sh /tmp/agent-slack-evidence/guards-001`. Both CLI targets reject edit, delete, and safe-mode send before any write request. `requests.jsonl` contains only fixture reads for messages and channel-scoped search.
 - **Live send and edit.** Run the send, edit, get, list, and raw history commands in the skill. The returned channel is `AS_DM`; all subsequent reads contain `AS_TAG` and `AS_TS`.
 - **Live delete.** Run the skill's cleanup after confirming the tag and author. The post-delete list has no tagged message or matching timestamp.
 
 ## Gotchas
 
-- Safe-mode send outside CI opens an interactive editor. Do not invoke it in the offline proof.
+- With fork PR 11, an edit may send `rich_text` blocks for inline formatting, and send and edit convert CommonMark links. With fork PR 5, safe mode also blocks compose in CI.
+- Safe-mode send outside CI opens an interactive editor. With fork PR 4, the editor URL carries a session token. Do not invoke it in the offline proof.
 - Do not use scheduled sends, file attachments, broadcasts, or another channel in the live recipe. Those paths remain unverified.
 - A successful send followed by a failed check can leave a message. Apply the skill's tagged cleanup after confirming its identity.

@@ -15,17 +15,17 @@ Work from the repository root. Install the locked dependencies before starting a
 .agents/skills/verify-agent-slack/offline.sh /tmp/agent-slack-evidence/run-001
 ```
 
-Use a new evidence directory for each run. Do not run two offline helpers in the same checkout at once because each rebuilds `dist`. The helper requires Bun, Python 3, and `jq`. It uses `env -i`, `--no-env-file`, and `--preload`; do not remove them. No real credentials are required. The preload redirects `https://fixture.slack.com` to the loopback stub, rejects other origins, and refuses redirects. The helper checks that a non-fixture request fails. The stub accepts only `conversations.history` for `D11111111` and records requests and responses without the dummy token or cookie. It returns an error for other API methods. The standard-token client uses the Slack SDK's default API address and cannot be redirected through `SLACK_WORKSPACE_URL`. The browser-token client uses that workspace URL. Do not try a standard token, a real token, a Slack URL, an auth import, or an unlisted CLI command in this offline environment. A missing token can trigger desktop and browser credential discovery. Do not use `message compose`; in CI it can send immediately. Safe mode blocks edit and delete, but it is not a general network or write sandbox.
+Use a new evidence directory for each run. Do not run two offline helpers in the same checkout at once because each rebuilds `dist`. The helper requires Bun, Python 3, and `jq`. It uses `env -i`, `--no-env-file`, and `--preload`; do not remove them. No real credentials are required. The preload redirects `https://fixture.slack.com` to the loopback stub, rejects other origins, and refuses redirects. The helper checks that a non-fixture request fails. The stub accepts only `conversations.history` for `D11111111` and records requests and responses without the dummy token or cookie. It returns an error for other API methods. The standard-token client uses the Slack SDK's default API address and cannot be redirected through `SLACK_WORKSPACE_URL`. The browser-token client uses that workspace URL. Do not try a standard token, a real token, a Slack URL, an auth import, or an unlisted CLI command in this offline environment. A missing token can trigger desktop and browser credential discovery. Do not use `message compose`. In CI it can send immediately when safe mode is off; with fork PR 5, safe mode blocks compose in CI. Safe mode blocks edit and delete, but it is not a general network or write sandbox.
 
 ## Doctor
 
 Run the offline helper above first. Its `doctor.txt` records the installed `agent-slack` path, the Bun path, and the package version. It checks that the source and freshly built bundle report that same version. The installed binary is identified, not executed. If the helper fails, inspect its `.command`, `.status`, `.out`, and `.err` files before driving another feature.
 
-For live mode, run `auth test` as shown below and retain only `ok`, `user_id`, and `team_id`. The command calls Slack, and an auth failure can cause automatic desktop credential refresh. Do not use `auth whoami` as a secret-free diagnostic because it prints partially redacted token values. Never print credential files or environment variables.
+For live mode, run `auth test` as shown below and retain only `ok`, `user_id`, and `team_id`. With stored credentials, this reads agent-slack's own macOS keychain item. The command calls Slack, and an auth failure can cause automatic desktop credential refresh. Do not use `auth whoami` as a secret-free diagnostic because it prints partially redacted token values. Never print credential files or environment variables.
 
 ## Drive
 
-Offline proof runs help, version, missing-text validation, safe-mode edit and delete guards, the CI safe-mode send guard, and `message get` plus `message list` against the stub on both primary targets. It checks exit codes, output content, and exactly four history requests. The commands and response JSON are in the evidence directory. Other feature paths need their own proof. See the feature map.
+Offline proof runs help, version, missing-text validation, safe-mode edit and delete guards, the CI safe-mode send guard, and `message get`, `message list`, and channel-scoped message search against the stub on both primary targets. It checks exit codes, output content, six history requests, and two channel-info requests. The commands and response JSON are in the evidence directory. Other feature paths need their own proof. See the feature map.
 
 ### Live mode for the coordinator only
 
@@ -136,9 +136,11 @@ as_capture history bun --no-env-file -e 'import { createCliContext } from "./src
 jq -e --arg dm "$AS_DM" --arg ts "$AS_TS" --arg text "$AS_TAG edited" '.message.channel_id == $dm and .message.ts == $ts and .message.content == $text' "$AS_EVIDENCE/get.json" >/dev/null
 jq -e --arg ts "$AS_TS" --arg text "$AS_TAG edited" 'any(.messages[]; .ts == $ts and .content == $text)' "$AS_EVIDENCE/list.json" >/dev/null
 jq -e --arg ts "$AS_TS" --arg self "$AS_SELF" --arg text "$AS_TAG edited" '.ok == true and any(.messages[]; .ts == $ts and .user == $self and .text == $text)' "$AS_EVIDENCE/history.json" >/dev/null
+as_capture search as_cli search messages "$AS_TAG" --workspace "$AS_WORKSPACE" --channel "$AS_DM" --user "$AS_SELF"
+jq -e --arg ts "$AS_TS" --arg tag "$AS_TAG" 'any((.messages // [])[]; .ts == $ts and (.content | contains($tag)))' "$AS_EVIDENCE/search.json" >/dev/null
 ```
 
-To exercise drafts, follow [the draft recipe](features/drafts.md) before cleanup. It requires browser auth and is optional when that precondition is absent. Record the skip. Preserve these JSON files in a private evidence directory. The history and list may contain other self-DM messages; do not publish them without review.
+To exercise drafts, follow [the draft recipe](features/drafts.md) before cleanup. It requires browser auth and an available self-DM composer. If a draft is already attached, stop and record the unmet precondition. Never update or delete a draft this run did not create. If browser auth is absent, record the skip. Preserve these JSON files in a private evidence directory. The history and list may contain other self-DM messages; do not publish them without review.
 
 ## Evidence
 

@@ -15,12 +15,12 @@ A user can search Slack messages and narrow results to a channel and author.
 
 Preconditions:
 
-- The coordinator has created the tagged self-DM message using the skill's live recipe. Slack search and access to the self-DM must be available to the active credential. The local stub does not implement search.
+- The coordinator has created the tagged self-DM message using the skill's live recipe. The active credential must be able to read the self-DM.
 
-- **Search.** Before deleting the message, run `as_capture search as_cli search messages "$AS_TAG" --workspace "$AS_WORKSPACE" --channel "$AS_DM" --user "$AS_SELF"`. Confirm that the result contains `AS_TS` and the tag. Capture the exit status and stderr.
-- **Empty result.** If Slack has not indexed the message or the account cannot search that DM, report the unmet precondition. A successful empty response does not prove a match.
+- **Search.** Before deleting the message, run the search and `jq` gate in the live recipe. The result must contain the tag at exactly `AS_TS`. The capture records the exit status and stderr.
+- **Empty result.** A successful empty response does not prove a match. Report a failed read or missing tagged message.
 
 ## Gotchas
 
 - Search results can include file downloads. Use only the unique run tag and the self-DM filter. Do not test `search files` or `search all` with this recipe.
-- Search indexing and permission behavior belong to Slack. The offline fixture cannot prove them.
+- Channel-scoped search scans `conversations.history` and does not wait for the Slack search index. The offline helper proves a channel-scoped match against its fixture. Unscoped search uses Slack's search index and is not covered offline.

@@ -18,13 +18,18 @@ A user can create, list, update, and delete a Slack-native draft without posting
 
 Preconditions:
 
-- The coordinator has completed the live identity and self-DM gates in the skill. Browser-style credentials are required. The local stub does not implement drafts.
+- The coordinator has completed the live identity and self-DM gates in the skill. Browser-style credentials are required. With fork PR 10, an existing draft attached to the self-DM composer prevents creation. Treat it as an unmet precondition. The local stub does not implement drafts.
 
 - **Create.** The commands below create the draft and save its ID in `AS_DRAFT`. The ID ties cleanup to the draft created by the authenticated operator in this run.
 - **Update and delete.** Run the commands below. `as_write` checks identity, self-DM, draft ID, tag, destination, and last-updated timestamp immediately before each action.
 
 ```bash
-as_write draft-create
+if ! as_write draft-create; then
+  if grep -Eq 'attached_draft_exists|already attached to' "$AS_EVIDENCE/draft-create.err"; then
+    printf 'Unmet precondition: a draft is already attached to the self-DM composer.\n' | tee "$AS_EVIDENCE/draft-precondition.txt" >&2
+  fi
+  exit 1
+fi
 AS_DRAFT=$(jq -er '.draft.id | select(type == "string" and length > 0)' "$AS_EVIDENCE/draft-create.json")
 export AS_DRAFT
 readonly AS_DRAFT
@@ -42,5 +47,6 @@ AS_DRAFT_CLEAN=1
 ## Gotchas
 
 - Drafts use undocumented Slack endpoints and require browser-style auth. If unavailable, report the unmet precondition. Do not change credentials or test another destination.
-- The list can contain unrelated drafts. Never delete those drafts. If the create response omits the ID, stop and report the tagged draft to the coordinator. Do not delete a draft identified by tag alone.
+- With fork PR 10, creation attaches the draft to the destination composer. Slack can reject a second create with `attached_draft_exists`; the CLI can report that a draft is already attached. Stop and record the unmet precondition. Never update or delete a draft this run did not create.
+- `drafts.list` returns one page, so absence from a list is not an exhaustive absence check. The list can contain unrelated drafts. Never delete those drafts. If the create response omits the ID, stop and report the tagged draft to the coordinator. Do not delete a draft identified by tag alone.
 - If the draft changed after the pre-delete read, Slack can reject the supplied last-updated timestamp. Re-read and revalidate the tag and destination before retrying.
