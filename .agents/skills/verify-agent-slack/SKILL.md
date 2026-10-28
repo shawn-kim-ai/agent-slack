@@ -29,13 +29,15 @@ Offline proof runs help, version, missing-text validation, safe-mode edit and de
 
 ### Live mode for the coordinator only
 
-This recipe is **unproven** until the coordinator runs it once. Do not run it as a delegate. Live runs use the operator's real credentials. Never overlap two live runs. Automatic auth refresh can rewrite `~/.config/agent-slack/credentials.json`. Never write to a channel other than the operator's self-DM. Use a unique run tag in every test message and draft, including edited text. Do not test attachments, scheduled sends, broadcasts, reactions, or compose with this recipe.
+This version of the recipe is **unproven** until the coordinator runs it. Do not run it as a delegate. Live runs use the operator's real credentials. Never overlap two live runs. Automatic auth refresh can rewrite `~/.config/agent-slack/credentials.json`. Never write to a channel other than the operator's self-DM. Use a unique run tag in every test message and draft, including edited text. Do not test attachments, scheduled sends, broadcasts, reactions, or compose with this recipe.
 
-Run the following in Bash from the repository root. Set `AS_WORKSPACE` to the exact workspace URL after confirming the intended account. Keep the same shell throughout. The checks stop if identity, self-DM, message, or draft evidence does not match. A self-DM that Slack refuses to open or identify is an unmet precondition. Stop without choosing another channel.
+Copy the Bash blocks, including the optional draft block, in order into a script. Run the script with Bash from the repository root. Set `AS_WORKSPACE` to the exact workspace URL after confirming the intended account. The checks stop if identity, self-DM, message, or draft evidence does not match. A self-DM that Slack refuses to open or identify is an unmet precondition. Stop without choosing another channel.
 
 ```bash
 set -euo pipefail
 umask 077
+unset AS_TS AS_DRAFT
+AS_MESSAGE_CLEAN=0 AS_DRAFT_CLEAN=0
 export AS_WORKSPACE='https://YOUR-WORKSPACE.slack.com'
 readonly AS_WORKSPACE
 export AGENT_SLACK_NO_UPDATE_CHECK=1
@@ -77,36 +79,55 @@ Use this function for every test write. It checks the current identity and self-
 
 ```bash
 as_write() {
-  local action=$1 draft_ts
-  as_cli auth test --workspace "$AS_WORKSPACE" 2> "$AS_EVIDENCE/$action-auth.err" |
-    jq -e --arg self "$AS_SELF" --arg team "$AS_TEAM" '{ok, user_id, team_id} | select(.ok == true and .user_id == $self and .team_id == $team)' > "$AS_EVIDENCE/$action-auth.json" || return 1
-  as_capture "$action-dm-info" bun --no-env-file -e 'import { createCliContext } from "./src/cli/context.ts"; const c = createCliContext(); const workspaceUrl = process.env.AS_WORKSPACE; const result = await c.withAutoRefresh({ workspaceUrl, work: async () => (await c.getClientForWorkspace(workspaceUrl)).client.api("conversations.info", { channel: process.env.AS_DM }) }); console.log(JSON.stringify(result, null, 2));' || return 1
-  jq -e --arg self "$AS_SELF" --arg dm "$AS_DM" '.ok == true and .channel.id == $dm and .channel.is_im == true and .channel.user == $self' "$AS_EVIDENCE/$action-dm-info.json" >/dev/null || return 1
+  local action=$1 label=${2:-$1} draft_ts
+  as_cli auth test --workspace "$AS_WORKSPACE" 2> "$AS_EVIDENCE/$label-auth.err" |
+    jq -e --arg self "$AS_SELF" --arg team "$AS_TEAM" '{ok, user_id, team_id} | select(.ok == true and .user_id == $self and .team_id == $team)' > "$AS_EVIDENCE/$label-auth.json" || return 1
+  as_capture "$label-dm-info" bun --no-env-file -e 'import { createCliContext } from "./src/cli/context.ts"; const c = createCliContext(); const workspaceUrl = process.env.AS_WORKSPACE; const result = await c.withAutoRefresh({ workspaceUrl, work: async () => (await c.getClientForWorkspace(workspaceUrl)).client.api("conversations.info", { channel: process.env.AS_DM }) }); console.log(JSON.stringify(result, null, 2));' || return 1
+  jq -e --arg self "$AS_SELF" --arg dm "$AS_DM" '.ok == true and .channel.id == $dm and .channel.is_im == true and .channel.user == $self' "$AS_EVIDENCE/$label-dm-info.json" >/dev/null || return 1
   case "$action" in
     send) as_capture send as_cli message send "$AS_DM" "$AS_TAG initial" --workspace "$AS_WORKSPACE" ;;
     edit|delete)
-      as_capture "$action-before" as_cli message get "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE" || return 1
-      jq -e --arg dm "$AS_DM" --arg ts "$AS_TS" --arg self "$AS_SELF" --arg tag "$AS_TAG" '.message.channel_id == $dm and .message.ts == $ts and .message.author.user_id == $self and (.message.content | contains($tag))' "$AS_EVIDENCE/$action-before.json" >/dev/null || return 1
+      as_capture "$label-before" as_cli message get "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE" || return 1
+      jq -e --arg dm "$AS_DM" --arg ts "$AS_TS" --arg self "$AS_SELF" --arg tag "$AS_TAG" '.message.channel_id == $dm and .message.ts == $ts and .message.author.user_id == $self and (.message.content | contains($tag))' "$AS_EVIDENCE/$label-before.json" >/dev/null || return 1
       if [[ $action == edit ]]; then
         as_capture edit as_cli message edit "$AS_DM" "$AS_TAG edited" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
       else
-        as_capture delete as_cli message delete "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
+        as_capture "$label" as_cli message delete "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
       fi ;;
     draft-create) as_capture draft-create as_cli message draft create "$AS_DM" "$AS_TAG draft" --workspace "$AS_WORKSPACE" ;;
     draft-update|draft-delete)
-      as_capture "$action-before" as_cli message draft list --all --workspace "$AS_WORKSPACE" || return 1
-      draft_ts=$(jq -er --arg id "$AS_DRAFT" --arg dm "$AS_DM" --arg tag "$AS_TAG" '[.drafts[]? | select(.id == $id and (.text | contains($tag)) and ([.destinations[].channel_id] == [$dm]) and ((.file_ids // []) | length == 0) and (.last_updated_ts | type == "string" and length > 0))] | if length == 1 then .[0].last_updated_ts else empty end' "$AS_EVIDENCE/$action-before.json") || return 1
+      as_capture "$label-before" as_cli message draft list --workspace "$AS_WORKSPACE" || return 1
+      draft_ts=$(jq -er --arg id "$AS_DRAFT" --arg dm "$AS_DM" --arg tag "$AS_TAG" '[.drafts[]? | select(.id == $id and (.text | contains($tag)) and ([.destinations[].channel_id] == [$dm]) and ((.file_ids // []) | length == 0) and (.last_updated_ts | type == "string" and length > 0))] | if length == 1 then .[0].last_updated_ts else empty end' "$AS_EVIDENCE/$label-before.json") || return 1
       if [[ $action == draft-update ]]; then
         as_capture draft-update as_cli message draft update "$AS_DRAFT" "$AS_TAG draft edited" --channel "$AS_DM" --last-updated-ts "$draft_ts" --workspace "$AS_WORKSPACE"
       else
-        as_capture draft-delete as_cli message draft delete "$AS_DRAFT" --last-updated-ts "$draft_ts" --workspace "$AS_WORKSPACE"
+        as_capture "$label" as_cli message draft delete "$AS_DRAFT" --last-updated-ts "$draft_ts" --workspace "$AS_WORKSPACE"
       fi ;;
     *) printf 'Unknown write action: %s\n' "$action" >&2; return 1 ;;
   esac
 }
+as_cleanup() {
+  local status=$?
+  trap - EXIT
+  if [[ -n ${AS_DRAFT:-} && ${AS_DRAFT_CLEAN:-0} != 1 ]]; then
+    if ! as_write draft-delete cleanup-draft; then
+      printf 'Draft cleanup failed. Inspect %s and report any remaining tagged draft.\n' "$AS_EVIDENCE" >&2
+      if (( status == 0 )); then status=1; fi
+    fi
+  fi
+  if [[ -n ${AS_TS:-} && ${AS_MESSAGE_CLEAN:-0} != 1 ]]; then
+    if ! as_write delete cleanup-message; then
+      printf 'Message cleanup failed. Inspect %s and report any remaining tagged message.\n' "$AS_EVIDENCE" >&2
+      if (( status == 0 )); then status=1; fi
+    fi
+  fi
+  exit "$status"
+}
+trap as_cleanup EXIT
 as_write send
 jq -e --arg dm "$AS_DM" '.ok == true and .channel_id == $dm and (.ts | type == "string" and test("^[0-9]+\\.[0-9]+$"))' "$AS_EVIDENCE/send.json" >/dev/null
-export AS_TS=$(jq -er .ts "$AS_EVIDENCE/send.json")
+AS_TS=$(jq -er .ts "$AS_EVIDENCE/send.json")
+export AS_TS
 readonly AS_TS
 as_write edit
 as_capture get as_cli message get "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
@@ -127,7 +148,7 @@ Capture the exact action, exit status, stdout, stderr, and the resulting state. 
 
 The offline helper's EXIT trap stops only the stub PID it started and removes only its own temporary directory. It retains the evidence. Confirm the output directory still contains `requests.jsonl`, both `*-get.out` files, and their status files after the helper exits.
 
-For live cleanup, first re-read the message and verify its channel, timestamp, author, and tag. Delete only that verified message. Do not delete by channel, date, or a guessed ID. If any check fails, stop and report the remaining tagged item to the coordinator. Use the draft cleanup in its feature file for a tagged draft. Then inspect history and draft list again to confirm the tagged items are gone. Keep evidence; it may contain private Slack content.
+For live cleanup, `as_write` re-reads the message and verifies its channel, timestamp, author, and tag. It deletes only that verified message. Do not delete by channel, date, or a guessed ID. The EXIT trap also attempts cleanup of any unconfirmed message or draft when the script stops. It uses the same gates and preserves the original failure status. If a cleanup gate fails, report the remaining tagged item. Keep evidence; it may contain private Slack content.
 
 ```bash
 as_write delete
@@ -135,9 +156,10 @@ as_capture after-delete as_cli message list "$AS_DM" --limit 20 --workspace "$AS
 jq -e --arg ts "$AS_TS" --arg tag "$AS_TAG" 'all((.messages // [])[]; .ts != $ts and ((.content // "") | contains($tag) | not))' "$AS_EVIDENCE/after-delete.json" >/dev/null
 as_capture history-after-delete bun --no-env-file -e 'import { createCliContext } from "./src/cli/context.ts"; const c = createCliContext(); const workspaceUrl = process.env.AS_WORKSPACE; const result = await c.withAutoRefresh({ workspaceUrl, work: async () => (await c.getClientForWorkspace(workspaceUrl)).client.api("conversations.history", { channel: process.env.AS_DM, latest: process.env.AS_TS, inclusive: true, limit: 1 }) }); console.log(JSON.stringify(result, null, 2));'
 jq -e --arg ts "$AS_TS" '.ok == true and all((.messages // [])[]; .ts != $ts)' "$AS_EVIDENCE/history-after-delete.json" >/dev/null
+AS_MESSAGE_CLEAN=1
 ```
 
-A failed live command can leave a tagged item behind. Re-read its exact ID and content before cleanup. Do not delete anything whose tag or self-DM destination cannot be confirmed.
+The trap cannot recover an item if the create response lacks its ID or the shell is killed without running the trap. A failed cleanup can also leave an item behind. Re-read its exact ID and content before cleanup. Do not delete anything whose tag or self-DM destination cannot be confirmed.
 
 ## Helpers
 
