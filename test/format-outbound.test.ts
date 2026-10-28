@@ -112,6 +112,12 @@ describe("formatOutboundSlackText", () => {
     ).toBe("see <https://example.com|[label](https://other.example)>");
   });
 
+  test("restores a Slack token nested in a rewritten CommonMark label", () => {
+    expect(formatOutboundSlackText("[ping <@U12345678>](https://example.com)")).toBe(
+      "<https://example.com|ping <@U12345678>>",
+    );
+  });
+
   test("real-world CI dump stays readable with mention + URL", () => {
     const input =
       '@U05BRPTKL6A heads up: CI "Install dependencies" is failing: https://github.com/x/y/actions/runs/1 & it needs <fix>';

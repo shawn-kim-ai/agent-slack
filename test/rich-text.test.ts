@@ -390,6 +390,14 @@ describe("textToRichTextBlocks", () => {
     ]);
   });
 
+  test("text after a one-line fence stays inline text", () => {
+    const result = textToRichTextBlocks("```hello``` - tail", { includeInlineFormatting: true })!;
+    expect(result[0]!.elements).toEqual([
+      { type: "rich_text_preformatted", elements: [{ type: "text", text: "hello" }] },
+      { type: "rich_text_section", elements: [{ type: "text", text: "- tail\n" }] },
+    ]);
+  });
+
   test("an existing Slack link with a CommonMark-looking label keeps its label", () => {
     expect(parseInlineElements("see <https://example.com|[label](https://other.example)>")).toEqual(
       [
