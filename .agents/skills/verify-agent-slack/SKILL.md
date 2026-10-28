@@ -37,11 +37,13 @@ Run the following in Bash from the repository root. Set `AS_WORKSPACE` to the ex
 set -euo pipefail
 umask 077
 export AS_WORKSPACE='https://YOUR-WORKSPACE.slack.com'
+readonly AS_WORKSPACE
 export AGENT_SLACK_NO_UPDATE_CHECK=1
 unset AGENT_SLACK_SAFE_MODE
 AS_EVIDENCE=$(mktemp -d "${TMPDIR:-/tmp}/agent-slack-live.XXXXXX")
 AS_TAG="[as-verify $(date -u +%Y%m%dT%H%M%SZ)-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')]"
 export AS_EVIDENCE AS_TAG
+readonly AS_EVIDENCE AS_TAG
 as_cli() { bun run --no-env-file src/index.ts "$@"; }
 as_capture() {
   local name=$1 rc=0
@@ -55,10 +57,13 @@ as_capture() {
 as_cli auth test --workspace "$AS_WORKSPACE" 2> "$AS_EVIDENCE/auth.err" | jq -e '{ok, user_id, team_id} | select(.ok == true and (.user_id | type == "string") and (.team_id | type == "string"))' > "$AS_EVIDENCE/auth.json"
 printf '0\n' > "$AS_EVIDENCE/auth.status"
 AS_SELF=$(jq -er '.user_id | select(test("^[UW][A-Z0-9]+$"))' "$AS_EVIDENCE/auth.json")
+AS_TEAM=$(jq -er '.team_id | select(test("^T[A-Z0-9]+$"))' "$AS_EVIDENCE/auth.json")
+readonly AS_SELF AS_TEAM
 as_capture dm-open as_cli user dm-open "$AS_SELF" --workspace "$AS_WORKSPACE"
 jq -e --arg self "$AS_SELF" '.channel_type == "dm" and .user_ids == [$self] and (.dm_channel_id | test("^D[A-Z0-9]+$"))' "$AS_EVIDENCE/dm-open.json" >/dev/null
 export AS_SELF
 export AS_DM=$(jq -er .dm_channel_id "$AS_EVIDENCE/dm-open.json")
+readonly AS_DM
 ```
 
 The CLI has no raw API command. Use its own client to verify the opened channel and capture the raw history response. The `conversations.info` check is a read-only gate before any test message.
@@ -66,16 +71,50 @@ The CLI has no raw API command. Use its own client to verify the opened channel 
 ```bash
 as_capture dm-info bun --no-env-file -e 'import { createCliContext } from "./src/cli/context.ts"; const c = createCliContext(); const workspaceUrl = process.env.AS_WORKSPACE; const result = await c.withAutoRefresh({ workspaceUrl, work: async () => (await c.getClientForWorkspace(workspaceUrl)).client.api("conversations.info", { channel: process.env.AS_DM }) }); console.log(JSON.stringify(result, null, 2));'
 jq -e --arg self "$AS_SELF" --arg dm "$AS_DM" '.ok == true and .channel.id == $dm and .channel.is_im == true and .channel.user == $self' "$AS_EVIDENCE/dm-info.json" >/dev/null
-as_capture send as_cli message send "$AS_DM" "$AS_TAG initial" --workspace "$AS_WORKSPACE"
+```
+
+Use this function for every test write. It checks the current identity and self-DM before each action and fixes each destination to the verified ID. Edit and delete also require the run tag and author. Draft update and delete require the ID returned by this run, the tag, and the self-DM destination.
+
+```bash
+as_write() {
+  local action=$1 draft_ts
+  as_cli auth test --workspace "$AS_WORKSPACE" 2> "$AS_EVIDENCE/$action-auth.err" |
+    jq -e --arg self "$AS_SELF" --arg team "$AS_TEAM" '{ok, user_id, team_id} | select(.ok == true and .user_id == $self and .team_id == $team)' > "$AS_EVIDENCE/$action-auth.json" || return 1
+  as_capture "$action-dm-info" bun --no-env-file -e 'import { createCliContext } from "./src/cli/context.ts"; const c = createCliContext(); const workspaceUrl = process.env.AS_WORKSPACE; const result = await c.withAutoRefresh({ workspaceUrl, work: async () => (await c.getClientForWorkspace(workspaceUrl)).client.api("conversations.info", { channel: process.env.AS_DM }) }); console.log(JSON.stringify(result, null, 2));' || return 1
+  jq -e --arg self "$AS_SELF" --arg dm "$AS_DM" '.ok == true and .channel.id == $dm and .channel.is_im == true and .channel.user == $self' "$AS_EVIDENCE/$action-dm-info.json" >/dev/null || return 1
+  case "$action" in
+    send) as_capture send as_cli message send "$AS_DM" "$AS_TAG initial" --workspace "$AS_WORKSPACE" ;;
+    edit|delete)
+      as_capture "$action-before" as_cli message get "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE" || return 1
+      jq -e --arg dm "$AS_DM" --arg ts "$AS_TS" --arg self "$AS_SELF" --arg tag "$AS_TAG" '.message.channel_id == $dm and .message.ts == $ts and .message.author.user_id == $self and (.message.content | contains($tag))' "$AS_EVIDENCE/$action-before.json" >/dev/null || return 1
+      if [[ $action == edit ]]; then
+        as_capture edit as_cli message edit "$AS_DM" "$AS_TAG edited" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
+      else
+        as_capture delete as_cli message delete "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
+      fi ;;
+    draft-create) as_capture draft-create as_cli message draft create "$AS_DM" "$AS_TAG draft" --workspace "$AS_WORKSPACE" ;;
+    draft-update|draft-delete)
+      as_capture "$action-before" as_cli message draft list --all --workspace "$AS_WORKSPACE" || return 1
+      draft_ts=$(jq -er --arg id "$AS_DRAFT" --arg dm "$AS_DM" --arg tag "$AS_TAG" '[.drafts[]? | select(.id == $id and (.text | contains($tag)) and ([.destinations[].channel_id] == [$dm]) and ((.file_ids // []) | length == 0) and (.last_updated_ts | type == "string" and length > 0))] | if length == 1 then .[0].last_updated_ts else empty end' "$AS_EVIDENCE/$action-before.json") || return 1
+      if [[ $action == draft-update ]]; then
+        as_capture draft-update as_cli message draft update "$AS_DRAFT" "$AS_TAG draft edited" --channel "$AS_DM" --last-updated-ts "$draft_ts" --workspace "$AS_WORKSPACE"
+      else
+        as_capture draft-delete as_cli message draft delete "$AS_DRAFT" --last-updated-ts "$draft_ts" --workspace "$AS_WORKSPACE"
+      fi ;;
+    *) printf 'Unknown write action: %s\n' "$action" >&2; return 1 ;;
+  esac
+}
+as_write send
 jq -e --arg dm "$AS_DM" '.ok == true and .channel_id == $dm and (.ts | type == "string" and test("^[0-9]+\\.[0-9]+$"))' "$AS_EVIDENCE/send.json" >/dev/null
 export AS_TS=$(jq -er .ts "$AS_EVIDENCE/send.json")
-as_capture edit as_cli message edit "$AS_DM" "$AS_TAG edited" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
+readonly AS_TS
+as_write edit
 as_capture get as_cli message get "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
 as_capture list as_cli message list "$AS_DM" --limit 20 --workspace "$AS_WORKSPACE"
 as_capture history bun --no-env-file -e 'import { createCliContext } from "./src/cli/context.ts"; const c = createCliContext(); const workspaceUrl = process.env.AS_WORKSPACE; const result = await c.withAutoRefresh({ workspaceUrl, work: async () => (await c.getClientForWorkspace(workspaceUrl)).client.api("conversations.history", { channel: process.env.AS_DM, latest: process.env.AS_TS, inclusive: true, limit: 1 }) }); console.log(JSON.stringify(result, null, 2));'
-jq -e --arg dm "$AS_DM" --arg ts "$AS_TS" --arg tag "$AS_TAG" '.message.channel_id == $dm and .message.ts == $ts and (.message.content | contains($tag))' "$AS_EVIDENCE/get.json" >/dev/null
-jq -e --arg ts "$AS_TS" --arg tag "$AS_TAG" 'any(.messages[]; .ts == $ts and (.content | contains($tag)))' "$AS_EVIDENCE/list.json" >/dev/null
-jq -e --arg ts "$AS_TS" --arg self "$AS_SELF" --arg tag "$AS_TAG" '.ok == true and any(.messages[]; .ts == $ts and .user == $self and (.text | contains($tag)))' "$AS_EVIDENCE/history.json" >/dev/null
+jq -e --arg dm "$AS_DM" --arg ts "$AS_TS" --arg text "$AS_TAG edited" '.message.channel_id == $dm and .message.ts == $ts and .message.content == $text' "$AS_EVIDENCE/get.json" >/dev/null
+jq -e --arg ts "$AS_TS" --arg text "$AS_TAG edited" 'any(.messages[]; .ts == $ts and .content == $text)' "$AS_EVIDENCE/list.json" >/dev/null
+jq -e --arg ts "$AS_TS" --arg self "$AS_SELF" --arg text "$AS_TAG edited" '.ok == true and any(.messages[]; .ts == $ts and .user == $self and .text == $text)' "$AS_EVIDENCE/history.json" >/dev/null
 ```
 
 To exercise drafts, follow [the draft recipe](features/drafts.md) before cleanup. It requires browser auth and is optional when that precondition is absent. Record the skip. Preserve these JSON files in a private evidence directory. The history and list may contain other self-DM messages; do not publish them without review.
@@ -91,9 +130,7 @@ The offline helper's EXIT trap stops only the stub PID it started and removes on
 For live cleanup, first re-read the message and verify its channel, timestamp, author, and tag. Delete only that verified message. Do not delete by channel, date, or a guessed ID. If any check fails, stop and report the remaining tagged item to the coordinator. Use the draft cleanup in its feature file for a tagged draft. Then inspect history and draft list again to confirm the tagged items are gone. Keep evidence; it may contain private Slack content.
 
 ```bash
-as_capture pre-delete as_cli message get "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
-jq -e --arg dm "$AS_DM" --arg ts "$AS_TS" --arg self "$AS_SELF" --arg tag "$AS_TAG" '.message.channel_id == $dm and .message.ts == $ts and .message.author.user_id == $self and (.message.content | contains($tag))' "$AS_EVIDENCE/pre-delete.json" >/dev/null
-as_capture delete as_cli message delete "$AS_DM" --ts "$AS_TS" --workspace "$AS_WORKSPACE"
+as_write delete
 as_capture after-delete as_cli message list "$AS_DM" --limit 20 --workspace "$AS_WORKSPACE"
 jq -e --arg ts "$AS_TS" --arg tag "$AS_TAG" 'all((.messages // [])[]; .ts != $ts and ((.content // "") | contains($tag) | not))' "$AS_EVIDENCE/after-delete.json" >/dev/null
 as_capture history-after-delete bun --no-env-file -e 'import { createCliContext } from "./src/cli/context.ts"; const c = createCliContext(); const workspaceUrl = process.env.AS_WORKSPACE; const result = await c.withAutoRefresh({ workspaceUrl, work: async () => (await c.getClientForWorkspace(workspaceUrl)).client.api("conversations.history", { channel: process.env.AS_DM, latest: process.env.AS_TS, inclusive: true, limit: 1 }) }); console.log(JSON.stringify(result, null, 2));'
