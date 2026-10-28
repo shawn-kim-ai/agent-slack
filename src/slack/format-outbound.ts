@@ -12,16 +12,21 @@
  * normalizes that to what Slack expects, while leaving already-well-formed
  * Slack tokens intact.
  */
+import { COMMONMARK_LINK_SOURCE } from "./markdown-links.ts";
+
+const CODE_OR_LINK_PATTERN = new RegExp(
+  ["```[\\s\\S]*?```", "`[^`\\n]+`", COMMONMARK_LINK_SOURCE].join("|"),
+  "g",
+);
+
 export function formatOutboundSlackText(text: string): string {
   if (!text) {
     return "";
   }
 
   // Rewrite CommonMark links as Slack manual links, leaving code untouched.
-  let out = text.replace(
-    /```[\s\S]*?```|`[^`\n]+`|\[([^\]\n]+)\]\(((?:https?:\/\/|mailto:)(?:\([^\s()]*\)|[^\s()])*)\)/g,
-    (m, label?: string, url?: string) =>
-      label != null && url != null ? `<${url}|${escapeMrkdwn(label)}>` : m,
+  let out = text.replace(CODE_OR_LINK_PATTERN, (m, label?: string, url?: string) =>
+    label != null && url != null ? `<${url}|${escapeMrkdwn(label)}>` : m,
   );
 
   // Protect already-formatted Slack tokens so `<`/`>` inside them aren't escaped.

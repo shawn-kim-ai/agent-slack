@@ -58,6 +58,32 @@ describe("parseInlineElements", () => {
     ]);
   });
 
+  test("[label](url) with token-breaking URL characters stays literal", () => {
+    expect(parseInlineElements("see [x](https://ex.com/a>b)")).toEqual([
+      { type: "text", text: "see [x](https://ex.com/a>b)" },
+    ]);
+    expect(parseInlineElements("see [x](https://ex.com/a|b)")).toEqual([
+      { type: "text", text: "see [x](https://ex.com/a|b)" },
+    ]);
+    expect(parseInlineElements("see [x](https://ex.com/a<b)")).toEqual([
+      { type: "text", text: "see [x](https://ex.com/a<b)" },
+    ]);
+  });
+
+  test("[label](url) keeps pipes in the label", () => {
+    expect(parseInlineElements("see [a|b](https://example.com)")).toEqual([
+      { type: "text", text: "see " },
+      { type: "link", url: "https://example.com", text: "a|b" },
+    ]);
+  });
+
+  test("![alt](url) parses as a literal bang plus a link", () => {
+    expect(parseInlineElements("see ![alt](https://example.com/i.png)")).toEqual([
+      { type: "text", text: "see !" },
+      { type: "link", url: "https://example.com/i.png", text: "alt" },
+    ]);
+  });
+
   test(":emoji: shortcode is parsed as an emoji element", () => {
     expect(parseInlineElements("Launch :rocket: now")).toEqual([
       { type: "text", text: "Launch " },

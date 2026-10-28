@@ -46,6 +46,30 @@ describe("formatOutboundSlackText", () => {
     );
   });
 
+  test("leaves CommonMark links with token-breaking URL characters alone", () => {
+    expect(formatOutboundSlackText("see [x](https://ex.com/a>b)")).toBe(
+      "see [x](https://ex.com/a&gt;b)",
+    );
+    expect(formatOutboundSlackText("see [x](https://ex.com/a|b)")).toBe(
+      "see [x](https://ex.com/a|b)",
+    );
+    expect(formatOutboundSlackText("see [x](https://ex.com/a<b)")).toBe(
+      "see [x](https://ex.com/a&lt;b)",
+    );
+  });
+
+  test("keeps pipes in CommonMark link labels", () => {
+    expect(formatOutboundSlackText("see [a|b](https://example.com)")).toBe(
+      "see <https://example.com|a|b>",
+    );
+  });
+
+  test("converts image-like CommonMark to a link after the bang", () => {
+    expect(formatOutboundSlackText("see ![alt](https://example.com/i.png)")).toBe(
+      "see !<https://example.com/i.png|alt>",
+    );
+  });
+
   test("leaves CommonMark link syntax in code and non-http targets alone", () => {
     expect(formatOutboundSlackText("run `[x](https://example.com)`")).toBe(
       "run `[x](https://example.com)`",

@@ -955,6 +955,29 @@ describe("editMessage", () => {
     ]);
   });
 
+  test("edits a CommonMark link with token-breaking URL characters as plain text", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const ctx = createContext(calls);
+
+    await editMessage({
+      ctx,
+      targetInput: "C12345678",
+      text: "see [x](https://ex.com/a>b)",
+      options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "see [x](https://ex.com/a&gt;b)",
+        },
+      },
+    ]);
+  });
+
   // chat.update escapes `<`/`>` in `text` when no blocks are sent, so links
   // and mentions must be carried by rich_text blocks to render.
   test("edits a message URL with a link label using rich text blocks", async () => {

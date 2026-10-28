@@ -1,3 +1,5 @@
+import { COMMONMARK_LINK_SOURCE } from "./markdown-links.ts";
+
 type InlineStyle = { bold?: true; italic?: true; strike?: true; code?: true };
 
 type InlineElement =
@@ -45,10 +47,29 @@ const BLOCKQUOTE_RE = /^> (.*)$/;
  * Handles: *bold*, _italic_, ~strike~, `code`, :emoji:, <url|label>, <url>,
  * and CommonMark [label](url) links
  */
+const INLINE_PATTERN = new RegExp(
+  [
+    "`([^`]+)`",
+    COMMONMARK_LINK_SOURCE,
+    "(?:^|(?<=[^A-Za-z0-9_])):([a-zA-Z0-9_+-]+):(?![A-Za-z0-9_+-])",
+    "\\*([^*]+)\\*",
+    "_([^_]+)_",
+    "~([^~]+)~",
+    "<@([UWB][A-Z0-9]+)(?:\\|[^>]*)?>",
+    "<#([CG][A-Z0-9]+)(?:\\|[^>]*)?>",
+    "<!subteam\\^([A-Z0-9]+)(?:\\|[^>]*)?>",
+    "<!(here|channel|everyone)(?:\\|[^>]*)?>",
+    "<([^>|]+)\\|([^>]+)>",
+    "<([^>|]+)>",
+    "(?:^|(?<=[^A-Za-z0-9_]))@([UWB][A-Z0-9]{6,})\\b",
+    "(?:^|(?<=[^A-Za-z0-9_]))@(here|channel|everyone)\\b",
+  ].join("|"),
+  "g",
+);
+
 export function parseInlineElements(text: string): InlineElement[] {
   const elements: InlineElement[] = [];
-  const re =
-    /`([^`]+)`|\[([^\]\n]+)\]\(((?:https?:\/\/|mailto:)(?:\([^\s()]*\)|[^\s()])*)\)|(?:^|(?<=[^A-Za-z0-9_])):([a-zA-Z0-9_+-]+):(?![A-Za-z0-9_+-])|\*([^*]+)\*|_([^_]+)_|~([^~]+)~|<@([UWB][A-Z0-9]+)(?:\|[^>]*)?>|<#([CG][A-Z0-9]+)(?:\|[^>]*)?>|<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>|<!(here|channel|everyone)(?:\|[^>]*)?>|<([^>|]+)\|([^>]+)>|<([^>|]+)>|(?:^|(?<=[^A-Za-z0-9_]))@([UWB][A-Z0-9]{6,})\b|(?:^|(?<=[^A-Za-z0-9_]))@(here|channel|everyone)\b/g;
+  const re = new RegExp(INLINE_PATTERN);
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
