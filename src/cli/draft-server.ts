@@ -45,7 +45,14 @@ export function openDraftEditor(
     };
 
     const server: Server = createServer(async (req, res) => {
-      const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+      let requestUrl: URL;
+      try {
+        requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+      } catch {
+        res.writeHead(400);
+        res.end("Bad request");
+        return;
+      }
 
       if (
         req.method === "GET" &&

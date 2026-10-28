@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { request, type IncomingHttpHeaders } from "node:http";
+import { connect } from "node:net";
 import { openDraftEditor } from "../src/cli/draft-server";
 
 async function startEditor() {
@@ -60,6 +61,28 @@ async function stopEditor(editor: Awaited<ReturnType<typeof startEditor>>) {
 }
 
 describe("draft editor session", () => {
+  test("rejects malformed request targets without interrupting the editor", async () => {
+    const editor = await startEditor();
+    try {
+      const response = await new Promise<string>((resolve, reject) => {
+        const socket = connect(Number(editor.url.port), "127.0.0.1", () => {
+          socket.write("GET //[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        });
+        socket.setTimeout(1000, () => socket.destroy(new Error("Request timed out")));
+        socket.on("data", (data) => {
+          resolve(data.toString());
+          socket.destroy();
+        });
+        socket.on("error", reject);
+      });
+      expect(response).toStartWith("HTTP/1.1 400 ");
+      const page = await call(editor.url, { path: editor.url.pathname + editor.url.search });
+      expect(page.status).toBe(200);
+    } finally {
+      await stopEditor(editor);
+    }
+  });
+
   test("protects the editor and send endpoint", async () => {
     const editor = await startEditor();
     const token = editor.url.searchParams.get("t");
