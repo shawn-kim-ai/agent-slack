@@ -156,6 +156,20 @@ function cells(input: { attachFile: string; blocksFile: string; scheduleAt: stri
       stderr: "is blocked",
     }),
     blockedCell({
+      name: "edit env",
+      argv: edit,
+      safeMode: "env",
+      ci: false,
+      stderr: "is blocked",
+    }),
+    blockedCell({
+      name: "edit flag CI",
+      argv: edit,
+      safeMode: "flag",
+      ci: true,
+      stderr: "is blocked",
+    }),
+    blockedCell({
       name: "edit env CI",
       argv: edit,
       safeMode: "env",
@@ -167,6 +181,20 @@ function cells(input: { attachFile: string; blocksFile: string; scheduleAt: stri
       argv: remove,
       safeMode: "flag",
       ci: false,
+      stderr: "is blocked",
+    }),
+    blockedCell({
+      name: "delete env",
+      argv: remove,
+      safeMode: "env",
+      ci: false,
+      stderr: "is blocked",
+    }),
+    blockedCell({
+      name: "delete flag CI",
+      argv: remove,
+      safeMode: "flag",
+      ci: true,
       stderr: "is blocked",
     }),
     blockedCell({
