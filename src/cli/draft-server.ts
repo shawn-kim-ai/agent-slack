@@ -31,19 +31,6 @@ export function openDraftEditor(
       const b = Buffer.from(sessionToken);
       return a.length === b.length && timingSafeEqual(a, b);
     };
-    const originAllowed = (req: IncomingMessage): boolean => {
-      const { origin } = req.headers;
-      if (!origin) {
-        return true;
-      }
-      const address = server.address();
-      return (
-        typeof address === "object" &&
-        address !== null &&
-        origin === `http://127.0.0.1:${address.port}`
-      );
-    };
-
     const server: Server = createServer(async (req, res) => {
       let requestUrl: URL;
       try {
@@ -75,7 +62,7 @@ export function openDraftEditor(
       if (
         req.method === "POST" &&
         (requestUrl.pathname === "/send" || requestUrl.pathname === "/cancel") &&
-        (!originAllowed(req) || !tokenMatches(req.headers["x-draft-token"]))
+        !tokenMatches(req.headers["x-draft-token"])
       ) {
         res.writeHead(403, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: false, error: "forbidden" }));

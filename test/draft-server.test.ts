@@ -106,12 +106,22 @@ describe("draft editor session", () => {
       expect(page.body).toContain("private-channel-for-test");
       expect(page.body).toContain(token);
 
+      const preflight = await call(editor.url, {
+        path: "/send",
+        method: "OPTIONS",
+        headers: {
+          Origin: "http://evil.example",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "x-draft-token",
+        },
+      });
+      expect(preflight.status).toBe(404);
+      expect(preflight.headers["access-control-allow-origin"]).toBeUndefined();
+
       const denied: Record<string, string>[] = [
         {},
         { "X-Draft-Token": "x".repeat(token.length) },
-        { "X-Draft-Token": token, Origin: "http://evil.example" },
         { Host: `evil.example:${editor.url.port}`, Origin: evilOrigin },
-        { Host: `evil.example:${editor.url.port}`, Origin: evilOrigin, "X-Draft-Token": token },
       ];
       for (const headers of denied) {
         const response = await call(editor.url, {
@@ -150,9 +160,7 @@ describe("draft editor session", () => {
       const denied: Record<string, string>[] = [
         {},
         { "X-Draft-Token": "x".repeat(token.length) },
-        { "X-Draft-Token": token, Origin: "http://evil.example" },
         { Host: `evil.example:${editor.url.port}`, Origin: evilOrigin },
-        { Host: `evil.example:${editor.url.port}`, Origin: evilOrigin, "X-Draft-Token": token },
       ];
       for (const headers of denied) {
         const response = await call(editor.url, {
