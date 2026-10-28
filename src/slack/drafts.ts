@@ -26,6 +26,7 @@ export type SlackDraft = {
   date_created?: number;
   date_scheduled?: number;
   file_ids?: string[];
+  is_sent?: boolean;
 };
 
 /**
@@ -103,6 +104,7 @@ export function parseDraftRecord(raw: unknown): SlackDraft | null {
     date_created: getNumber(raw.date_created),
     date_scheduled: dateScheduled && dateScheduled > 0 ? dateScheduled : undefined,
     file_ids: fileIds.length > 0 ? fileIds : undefined,
+    is_sent: raw.is_sent === true ? true : undefined,
   };
 }
 

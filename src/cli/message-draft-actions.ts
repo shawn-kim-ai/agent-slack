@@ -84,13 +84,21 @@ export async function createDraftAction(input: {
         if (input.options.attach && !uploadedFileIds) {
           uploadedFileIds = await uploadDraftAttachments(client, input.options.attach);
         }
-        const draft = await createDraft(client, {
-          channelId,
-          text: input.text,
-          threadTs,
-          broadcast: input.options.broadcast,
-          fileIds: uploadedFileIds,
-        });
+        let draft: SlackDraft | null;
+        try {
+          draft = await createDraft(client, {
+            channelId,
+            text: input.text,
+            threadTs,
+            broadcast: input.options.broadcast,
+            fileIds: uploadedFileIds,
+          });
+        } catch (err) {
+          if (!isAttachedDraftExistsError(err)) {
+            throw err;
+          }
+          throw await attachedDraftConflictError({ client, channelId, threadTs, cause: err });
+        }
         return { ok: true, draft };
       },
     });
@@ -100,6 +108,55 @@ export async function createDraftAction(input: {
     await cleanupOrphanedDraftFiles({ ctx: input.ctx, workspaceUrl, fileIds: uploadedFileIds });
     throw err;
   }
+}
+
+/**
+ * Slack allows one attached draft per channel or thread composer, so a second
+ * create fails with attached_draft_exists. Match it as a substring: the
+ * browser transport throws the bare code, while an ok:false response surfaces
+ * wrapped as "Slack drafts.create failed: attached_draft_exists".
+ */
+function isAttachedDraftExistsError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("attached_draft_exists");
+}
+
+/**
+ * Translate an attached_draft_exists failure into an actionable error. Names
+ * the conflicting draft when one active unsent draft targets the same channel
+ * and thread, so the user can update it instead. Never touches that draft:
+ * its unsent text may be the operator's own.
+ */
+async function attachedDraftConflictError(input: {
+  client: SlackApiClient;
+  channelId: string;
+  threadTs?: string;
+  cause: unknown;
+}): Promise<Error> {
+  let existingId: string | undefined;
+  try {
+    const { drafts } = await listDrafts(input.client);
+    existingId = drafts.find(
+      (draft) =>
+        draft.is_sent !== true &&
+        draft.destinations.some(
+          (d) => d.channel_id === input.channelId && d.thread_ts === input.threadTs,
+        ),
+    )?.id;
+  } catch {
+    // Best-effort lookup: without the id the message below still says what to do.
+  }
+  const where = input.threadTs ? "this thread" : "this channel";
+  if (!existingId) {
+    return new Error(
+      `A draft is already attached to ${where}. Run "agent-slack message draft list" to find it, then "agent-slack message draft update <draft-id> <text>" to edit it, or delete it first.`,
+      { cause: input.cause },
+    );
+  }
+  return new Error(
+    `A draft (${existingId}) is already attached to ${where}. Run "agent-slack message draft update ${existingId} <text>" to edit it, or delete it first.`,
+    { cause: input.cause },
+  );
 }
 
 export async function updateDraftAction(input: {
