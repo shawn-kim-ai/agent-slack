@@ -65,12 +65,17 @@ export function openDraftEditor(
         return;
       }
 
+      if (
+        req.method === "POST" &&
+        (requestUrl.pathname === "/send" || requestUrl.pathname === "/cancel") &&
+        (!originAllowed(req) || !tokenMatches(req.headers["x-draft-token"]))
+      ) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: "forbidden" }));
+        return;
+      }
+
       if (req.method === "POST" && requestUrl.pathname === "/send") {
-        if (!originAllowed(req) || !tokenMatches(req.headers["x-draft-token"])) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ ok: false, error: "forbidden" }));
-          return;
-        }
         try {
           const body = await readBody(req);
           const data = JSON.parse(body) as { text: string };
@@ -97,11 +102,6 @@ export function openDraftEditor(
       }
 
       if (req.method === "POST" && requestUrl.pathname === "/cancel") {
-        if (!originAllowed(req) || !tokenMatches(req.headers["x-draft-token"])) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ ok: false, error: "forbidden" }));
-          return;
-        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
         settled = true;
