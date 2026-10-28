@@ -5,13 +5,20 @@ import { resolveChannelId, resolveChannelName, normalizeChannelInput } from "../
 import { warnOnTruncatedSlackUrl } from "./message-url-warning.ts";
 import { openDraftEditor } from "./draft-server.ts";
 import { buildUnfurlApiParams } from "./unfurl-options.ts";
+import { isSafeModeEnabled } from "./safe-mode-config.ts";
 
 export async function composeMessage(input: {
   ctx: CliContext;
   targetInput: string;
   initialText?: string;
+  safeMode?: boolean;
   options: { workspace?: string; threadTs?: string; unfurl?: boolean };
 }): Promise<Record<string, unknown>> {
+  if (process.env.CI && isSafeModeEnabled({ cliFlag: input.safeMode })) {
+    throw new Error(
+      'Safe mode is active: "message compose" cannot skip the editor in CI because that would post without human review.',
+    );
+  }
   const target = parseMsgTarget(String(input.targetInput));
   if (target.kind === "user") {
     throw new Error(

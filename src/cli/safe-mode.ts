@@ -1,25 +1,7 @@
 import type { CliContext } from "./context.ts";
 import { composeMessage } from "./compose-actions.ts";
 
-const TRUTHY_VALUES = new Set(["1", "true", "yes", "on"]);
-
-/**
- * Safe mode keeps a human in the loop for anything that posts to Slack:
- * `message send` is redirected to the draft editor, and `message edit` /
- * `message delete` are blocked. Enabled via the global `--safe-mode` flag
- * or the AGENT_SLACK_SAFE_MODE env var ("1", "true", "yes", "on").
- */
-export function isSafeModeEnabled(input?: {
-  cliFlag?: boolean;
-  env?: Record<string, string | undefined>;
-}): boolean {
-  if (input?.cliFlag) {
-    return true;
-  }
-  const env = input?.env ?? process.env;
-  const raw = env.AGENT_SLACK_SAFE_MODE?.trim().toLowerCase();
-  return raw !== undefined && TRUTHY_VALUES.has(raw);
-}
+export { isSafeModeEnabled } from "./safe-mode-config.ts";
 
 export function safeModeBlockedError(action: "edit" | "delete"): Error {
   return new Error(
@@ -88,6 +70,7 @@ export async function redirectSendToDraft(
     ctx: input.ctx,
     targetInput: input.targetInput,
     initialText: input.text,
+    safeMode: true,
     options: {
       workspace: input.options.workspace,
       threadTs: input.options.threadTs,

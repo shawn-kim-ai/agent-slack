@@ -117,6 +117,7 @@ describe("redirectSendToDraft", () => {
           ctx: stubCtx,
           targetInput: "#general",
           initialText: "here's the report",
+          safeMode: true,
           options: { workspace: "myteam", threadTs: "1770165109.628379", unfurl: false },
         },
       ]);

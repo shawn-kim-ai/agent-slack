@@ -295,15 +295,11 @@ export function registerMessageCommand(input: { program: Command; ctx: CliContex
         { workspace?: string; threadTs?: string; unfurl?: boolean },
       ];
       try {
-        if (safeModeActive() && process.env.CI) {
-          throw new Error(
-            'Safe mode is active: "message compose" cannot skip the editor in CI because that would post without human review.',
-          );
-        }
         const payload = await composeMessage({
           ctx: input.ctx,
           targetInput,
           initialText: text,
+          safeMode: safeModeActive(),
           options,
         });
         console.log(JSON.stringify(payload, null, 2));
