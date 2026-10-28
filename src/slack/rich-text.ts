@@ -309,7 +309,7 @@ function collectList(input: {
 
     const style = orderedMatch != null ? "ordered" : "bullet";
     const match = orderedMatch ?? bulletMatch!;
-    const indent = match[1]!.length >= baseIndent + 2 ? 1 : 0;
+    const indent = Math.max(0, Math.floor((match[1]!.length - baseIndent) / 2));
     if (currentStyle !== style || currentIndent !== indent) {
       flush();
       currentStyle = style;
