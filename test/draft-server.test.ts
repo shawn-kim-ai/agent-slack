@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { request } from "node:http";
+import { request, type IncomingHttpHeaders } from "node:http";
 import { openDraftEditor } from "../src/cli/draft-server";
 
 async function startEditor() {
@@ -25,7 +25,7 @@ async function startEditor() {
 function call(
   url: URL,
   options: { path: string; method?: string; headers?: Record<string, string>; body?: string },
-): Promise<{ status: number | undefined; body: string }> {
+): Promise<{ status: number | undefined; body: string; headers: IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const req = request(
       {
@@ -39,7 +39,7 @@ function call(
         let body = "";
         res.setEncoding("utf8");
         res.on("data", (chunk: string) => (body += chunk));
-        res.on("end", () => resolve({ status: res.statusCode, body }));
+        res.on("end", () => resolve({ status: res.statusCode, body, headers: res.headers }));
         res.on("error", reject);
       },
     );
@@ -79,6 +79,7 @@ describe("draft editor session", () => {
       }
       const page = await call(editor.url, { path: editor.url.pathname + editor.url.search });
       expect(page.status).toBe(200);
+      expect(page.headers["referrer-policy"]).toBe("no-referrer");
       expect(page.body).toContain("private-channel-for-test");
       expect(page.body).toContain(token);
 

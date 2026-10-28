@@ -57,7 +57,10 @@ export function openDraftEditor(
           return;
         }
         const html = buildEditorHtml(config, sessionToken);
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Referrer-Policy": "no-referrer",
+        });
         res.end(html);
         return;
       }
