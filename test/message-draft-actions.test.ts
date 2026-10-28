@@ -375,6 +375,9 @@ describe("createDraftAction: attached_draft_exists", () => {
     expect(output).not.toContain("DrSent");
     expect(output).toContain("agent-slack message draft update DrExist <text>");
     expect(output).toContain("delete");
+    expect(output).toBe(
+      'A draft (DrExist) is already attached to this thread. Run "agent-slack message draft update DrExist <text>" to edit it, or delete it first: Slack drafts.create failed: attached_draft_exists',
+    );
     // Cheap lookup: one active-only drafts.list call.
     const lists = calls.filter((c) => c.method === "drafts.list");
     expect(lists).toHaveLength(1);
@@ -432,6 +435,7 @@ describe("createDraftAction: attached_draft_exists", () => {
     expect(output).toContain("agent-slack message draft list");
     expect(output).toContain("agent-slack message draft update <draft-id> <text>");
     expect(output).toContain("delete");
+    expect(output).not.toContain(".:");
   });
 
   test("still guides the user when the lookup itself fails", async () => {

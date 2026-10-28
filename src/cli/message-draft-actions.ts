@@ -144,12 +144,12 @@ async function attachedDraftConflictError(input: {
   const where = input.threadTs ? "this thread" : "this channel";
   if (!existingId) {
     return new Error(
-      `A draft is already attached to ${where}. Run "agent-slack message draft list" to find it, then "agent-slack message draft update <draft-id> <text>" to edit it, or delete it first.`,
+      `A draft is already attached to ${where}. Run "agent-slack message draft list" to find it, then "agent-slack message draft update <draft-id> <text>" to edit it, or delete it first`,
       { cause: input.cause },
     );
   }
   return new Error(
-    `A draft (${existingId}) is already attached to ${where}. Run "agent-slack message draft update ${existingId} <text>" to edit it, or delete it first.`,
+    `A draft (${existingId}) is already attached to ${where}. Run "agent-slack message draft update ${existingId} <text>" to edit it, or delete it first`,
     { cause: input.cause },
   );
 }
