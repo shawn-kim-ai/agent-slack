@@ -173,16 +173,30 @@ export async function searchMessagesInChannelsFallback(
   const matchedSummaries: SlackMessageSummary[] = [];
 
   const results: SearchCompactMessage[] = [];
+  let fetchedAnyPage = false;
 
   channelLoop: for (const channelId of channelIds) {
     let cursor: string | undefined;
     const seenCursors = new Set<string>();
     for (;;) {
-      const resp = await client.api("conversations.history", {
-        channel: channelId,
-        limit: 200,
-        cursor,
-      });
+      let resp: Record<string, unknown>;
+      try {
+        resp = await client.api("conversations.history", {
+          channel: channelId,
+          limit: 200,
+          cursor,
+        });
+      } catch (error) {
+        if (!fetchedAnyPage || !isSlackRateLimitError(error)) {
+          throw error;
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `Warning: Slack rate limit reached while paging channel history; results may be incomplete: ${detail}`,
+        );
+        break channelLoop;
+      }
+      fetchedAnyPage = true;
       const messages = isRecord(resp) ? asArray(resp.messages).filter(isRecord) : [];
       const responseMetadata = isRecord(resp.response_metadata) ? resp.response_metadata : null;
       const nextCursor = responseMetadata
@@ -261,6 +275,16 @@ export async function searchMessagesInChannelsFallback(
     messages: results,
     referenced_users: toReferencedUsers(referencedUserIds, usersById),
   };
+}
+
+function isSlackRateLimitError(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false;
+  }
+  if (error.code === "slack_webapi_rate_limited_error") {
+    return true;
+  }
+  return error instanceof Error && error.message.includes("was rate limited");
 }
 
 export function passesContentTypeFilter(m: CompactSlackMessage, contentType: ContentType): boolean {
