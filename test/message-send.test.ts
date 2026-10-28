@@ -1024,6 +1024,52 @@ describe("editMessage", () => {
     ]);
   });
 
+  test("edits nested emphasis as plain text so Slack renders both styles", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const ctx = createContext(calls);
+
+    await editMessage({
+      ctx,
+      targetInput: "C12345678",
+      text: "This is *bold _and italic_*",
+      options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "This is *bold _and italic_*",
+        },
+      },
+    ]);
+  });
+
+  test("edits a link nested in emphasis as plain text without blocks", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const ctx = createContext(calls);
+
+    await editMessage({
+      ctx,
+      targetInput: "C12345678",
+      text: "Review *[PR](https://example.com)*",
+      options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "Review *<https://example.com|PR>*",
+        },
+      },
+    ]);
+  });
+
   // chat.update escapes `<`/`>` in `text` when no blocks are sent, so links
   // and mentions must be carried by rich_text blocks to render.
   test("edits a message URL with a link label using rich text blocks", async () => {
