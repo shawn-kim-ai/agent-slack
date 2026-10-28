@@ -71,12 +71,14 @@ for surface in source built; do
   run "$surface-safe-send" 1 "${cli[@]}" --safe-mode message send D11111111 text
   run "$surface-get" 0 "${cli[@]}" message get D11111111 --ts 1700000000.000001
   run "$surface-list" 0 "${cli[@]}" message list D11111111 --limit 1
+  run "$surface-search" 0 "${cli[@]}" search messages no-such-query --channel D11111111
   grep -q 'required' "$evidence/$surface-validation.err"
   grep -q 'Safe mode is active' "$evidence/$surface-safe-edit.err"
   grep -q 'Safe mode is active' "$evidence/$surface-safe-delete.err"
   grep -q 'interactive draft editor is unavailable in CI' "$evidence/$surface-safe-send.err"
   jq -e '.message.ts == "1700000000.000001" and .message.channel_id == "D11111111" and .message.content == "Hello *agent*"' "$evidence/$surface-get.out" >/dev/null
   jq -e '.channel_id == "D11111111" and (.messages | length == 1) and .messages[0].ts == "1700000000.000001" and .messages[0].content == "Hello *agent*"' "$evidence/$surface-list.out" >/dev/null
+  jq -e '.messages | length == 1 and .[0].ts == "1700000000.000001" and .[0].content == "Hello *agent*"' "$evidence/$surface-search.out" >/dev/null
 done
-jq -se 'length == 4 and all(.[]; .path == "/api/conversations.history" and .params.channel == ["D11111111"])' "$evidence/requests.jsonl" >/dev/null
+jq -se 'length == 6 and all(.[]; .path == "/api/conversations.history" and .params.channel == ["D11111111"])' "$evidence/requests.jsonl" >/dev/null
 printf 'Offline proof passed. Evidence: %s\n' "$evidence"
