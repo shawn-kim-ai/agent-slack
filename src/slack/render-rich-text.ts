@@ -19,25 +19,39 @@ export function extractMrkdwnFromRichTextBlock(block: unknown): string {
     return "";
   }
   const elements = Array.isArray(block.elements) ? block.elements : [];
-  const out: { isList: boolean; text: string }[] = [];
+  const out: { isList: boolean; isTopLevelRestart: boolean; text: string }[] = [];
   for (const el of elements) {
     const txt = extractMrkdwnFromRichTextElement(el);
     if (txt.trim()) {
       out.push({
         isList: isRecord(el) && el.type === "rich_text_list",
+        isTopLevelRestart: isTopLevelOrderedRestart(el),
         text: txt,
       });
     }
   }
   return out
-    .map(({ text }, index) => {
+    .map(({ text, isTopLevelRestart }, index) => {
       if (index === 0) {
         return text;
       }
       const previous = out[index - 1]!;
-      return `${previous.isList && out[index]!.isList ? "\n" : "\n\n"}${text}`;
+      const joinLists = previous.isList && out[index]!.isList && !isTopLevelRestart;
+      return `${joinLists ? "\n" : "\n\n"}${text}`;
     })
     .join("");
+}
+
+function isTopLevelOrderedRestart(el: unknown): boolean {
+  if (!isRecord(el) || el.type !== "rich_text_list" || el.style !== "ordered") {
+    return false;
+  }
+  const indent =
+    typeof el.indent === "number" && Number.isInteger(el.indent) ? Math.max(0, el.indent) : 0;
+  if (indent !== 0) {
+    return false;
+  }
+  return !(typeof el.offset === "number" && Number.isFinite(el.offset) && el.offset > 0);
 }
 
 function extractMrkdwnFromRichTextElement(el: unknown): string {

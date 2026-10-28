@@ -41,4 +41,12 @@ describe("extractMrkdwnFromRichTextBlock", () => {
     const blocks = textToRichTextBlocks(text)!;
     expect(extractMrkdwnFromRichTextBlock(blocks[0])).toBe(text);
   });
+
+  test("keeps the blank separator before a restarted ordered list", () => {
+    const text = "1. First\n  - Detail\n\n1. Restart";
+    const rendered = extractMrkdwnFromRichTextBlock(textToRichTextBlocks(text)![0]);
+    expect(rendered).toBe(text);
+    const renderedAgain = extractMrkdwnFromRichTextBlock(textToRichTextBlocks(rendered)![0]);
+    expect(renderedAgain).toBe(text);
+  });
 });
