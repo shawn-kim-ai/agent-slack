@@ -284,7 +284,10 @@ function isSlackRateLimitError(error: unknown): boolean {
   if (error.code === "slack_webapi_rate_limited_error") {
     return true;
   }
-  return error instanceof Error && error.message.includes("was rate limited");
+  return (
+    error instanceof Error &&
+    (error.message.includes("was rate limited") || error.message.includes("Slack HTTP 429"))
+  );
 }
 
 export function passesContentTypeFilter(m: CompactSlackMessage, contentType: ContentType): boolean {

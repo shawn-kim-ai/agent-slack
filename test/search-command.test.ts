@@ -442,6 +442,51 @@ describe("search referenced users", () => {
     expect(warns.join("\n")).toContain("may be incomplete");
   });
 
+  test("searchSlack keeps partial results when retries exhaust into an HTTP 429", async () => {
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor === undefined) {
+          return {
+            response_metadata: { next_cursor: "page-2" },
+            messages: [{ ts: "2.000002", text: "needle first page", user: "U11111111" }],
+          };
+        }
+        throw new Error("Slack HTTP 429 calling conversations.history");
+      },
+    };
+
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = ((...args: unknown[]) => {
+      warns.push(args.map(String).join(" "));
+    }) as typeof console.warn;
+    try {
+      const result = await searchSlack({
+        client: client as never,
+        auth: { auth_type: "standard", token: "x" },
+        options: {
+          workspace_url: "https://workspace.slack.com",
+          query: "needle",
+          kind: "messages",
+          channels: ["C12345678"],
+          limit: 20,
+          max_content_chars: 4000,
+          content_type: "any",
+          download: false,
+        },
+      });
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages?.[0]?.content).toBe("needle first page");
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warns.join("\n")).toContain("may be incomplete");
+  });
+
   test("searchSlack still throws on a first-page rate limit or a later non-rate-limit failure", async () => {
     const firstPageLimited = {
       api: async (method: string) => {
