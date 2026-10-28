@@ -28,9 +28,10 @@ for _ in {1..100}; do
 done
 [[ -s "$run_dir/port" ]]
 port=$(cat "$run_dir/port")
-clean_env=(env -i "PATH=$PATH" "HOME=$run_dir/home" "XDG_CONFIG_HOME=$run_dir/config" "XDG_CACHE_HOME=$run_dir/cache" "XDG_DATA_HOME=$run_dir/data" "XDG_RUNTIME_DIR=$run_dir/runtime" "TMPDIR=$run_dir/tmp" "CI=1" "AGENT_SLACK_NO_UPDATE_CHECK=1" "SLACK_TOKEN=xoxc-offline-fixture" "SLACK_COOKIE_D=offline-fixture" "SLACK_WORKSPACE_URL=http://127.0.0.1:$port")
-source_cli=("${clean_env[@]}" "$bun_bin" run --no-env-file src/index.ts)
-built_cli=("${clean_env[@]}" "$bun_bin" --no-env-file dist/index.js)
+clean_env=(env -i "PATH=$PATH" "HOME=$run_dir/home" "XDG_CONFIG_HOME=$run_dir/config" "XDG_CACHE_HOME=$run_dir/cache" "XDG_DATA_HOME=$run_dir/data" "XDG_RUNTIME_DIR=$run_dir/runtime" "TMPDIR=$run_dir/tmp" "CI=1" "AGENT_SLACK_NO_UPDATE_CHECK=1" "SLACK_TOKEN=xoxc-offline-fixture" "SLACK_COOKIE_D=offline-fixture" "SLACK_WORKSPACE_URL=https://fixture.slack.com" "AGENT_SLACK_FIXTURE_PORT=$port")
+preload=$repo/.agents/skills/verify-agent-slack/preload.js
+source_cli=("${clean_env[@]}" "$bun_bin" run --no-env-file --preload "$preload" src/index.ts)
+built_cli=("${clean_env[@]}" "$bun_bin" --no-env-file --preload "$preload" dist/index.js)
 
 run() {
   local name=$1 expected=$2 status
@@ -54,6 +55,8 @@ run() {
   printf 'package version: '
   jq -r .version package.json
 } >"$evidence/doctor.txt"
+run blocked-host 1 "${clean_env[@]}" "$bun_bin" --no-env-file --preload "$preload" -e 'await fetch("https://example.com")'
+grep -q 'Offline fixture refused a non-fixture request' "$evidence/blocked-host.err"
 run source-version 0 "${source_cli[@]}" --version
 run built-version 0 "${built_cli[@]}" --version
 cmp "$evidence/source-version.out" "$evidence/built-version.out"

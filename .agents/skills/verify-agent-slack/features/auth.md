@@ -18,7 +18,7 @@ Preconditions:
 
 - For live mode, the coordinator has selected the workspace and can use its real credentials. Offline mode uses a fresh HOME and dummy browser credentials.
 
-- **Offline isolation.** Run `.agents/skills/verify-agent-slack/offline.sh /tmp/agent-slack-evidence/auth-001`. It clears the inherited environment, disables `.env` loading and update checks, and sends the fixture token only to loopback. The log contains no token or cookie.
+- **Offline isolation.** Run `.agents/skills/verify-agent-slack/offline.sh /tmp/agent-slack-evidence/auth-001`. It clears the inherited environment, disables `.env` loading and update checks, and uses a preload to send fixture requests to loopback and reject other origins. The log contains no token or cookie.
 - **Live identity.** Run the `auth test` command in the skill's live setup. Its saved JSON contains only `ok`, `user_id`, and `team_id`, and `ok` is true.
 
 ## Gotchas
