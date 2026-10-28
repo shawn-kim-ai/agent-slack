@@ -52,7 +52,9 @@ const INLINE_PATTERN = new RegExp(
   [
     "`([^`]+)`",
     COMMONMARK_LINK_SOURCE,
-    "(\\[[^\\]\\n]+\\]\\((?:https?:\\/\\/|mailto:)[^)\\s]*\\)|(?:https?:\\/\\/|mailto:)[^\\s<>]+)",
+    // A rejected span consumes one paren level like a valid link, so a `)`
+    // inside the URL cannot end the span early and expose its tail.
+    "(\\[[^\\]\\n]+\\]\\((?:https?:\\/\\/|mailto:)(?:\\([^()\\s]*\\)|[^)\\s])*\\)|(?:https?:\\/\\/|mailto:)[^\\s<>]+)",
     "(?:^|(?<=[^A-Za-z0-9_])):([a-zA-Z0-9_+-]+):(?![A-Za-z0-9_+-])",
     "\\*([^*]+)\\*",
     "_([^_]+)_",

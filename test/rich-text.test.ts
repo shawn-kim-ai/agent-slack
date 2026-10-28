@@ -76,6 +76,12 @@ describe("parseInlineElements", () => {
     ]);
   });
 
+  test("a rejected span with parens, a pipe, and underscores stays literal", () => {
+    expect(parseInlineElements("[x](https://ex.com/foo(bar)|my_org/my_repo)")).toEqual([
+      { type: "text", text: "[x](https://ex.com/foo(bar)|my_org/my_repo)" },
+    ]);
+  });
+
   test("a bare URL keeps underscores literal", () => {
     expect(parseInlineElements("see https://github.com/my_org/my_repo")).toEqual([
       { type: "text", text: "see https://github.com/my_org/my_repo" },
