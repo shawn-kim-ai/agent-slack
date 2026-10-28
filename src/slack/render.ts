@@ -12,12 +12,20 @@ export function renderSlackMessageContent(msg: unknown): string {
     depth: 0,
     seen: new WeakSet<object>(),
   });
+  const text = getString(msgObj.text).trim();
+  if (blockMrkdwn.trim() && !attachmentMrkdwn.trim() && Array.isArray(msgObj.blocks)) {
+    const nonHeaderBlocks = msgObj.blocks.filter(
+      (block) => !isRecord(block) || block.type !== "header",
+    );
+    if (!extractMrkdwnFromBlocks(nonHeaderBlocks).trim()) {
+      return slackMrkdwnToMarkdown(uniqueTexts([blockMrkdwn, text]).join("\n\n")).trim();
+    }
+  }
   const combined = [blockMrkdwn.trim(), attachmentMrkdwn.trim()].filter(Boolean).join("\n\n");
   if (combined) {
     return slackMrkdwnToMarkdown(combined).trim();
   }
 
-  const text = getString(msgObj.text).trim();
   if (text) {
     return slackMrkdwnToMarkdown(text).trim();
   }
@@ -36,6 +44,13 @@ function extractMrkdwnFromBlocks(blocks: unknown): string {
       continue;
     }
     const type = getString(b.type);
+    if (type === "header") {
+      const text = isRecord(b.text) ? getString(b.text.text) : "";
+      if (text.trim()) {
+        out.push(text);
+      }
+      continue;
+    }
     if (type === "section") {
       const text = isRecord(b.text) ? b.text : null;
       const textType = text ? getString(text.type) : "";
