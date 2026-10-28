@@ -372,4 +372,30 @@ describe("textToRichTextBlocks", () => {
     expect(result).not.toBeNull();
     expect(result[0]!.elements.find((e) => e.type === "rich_text_quote")).toBeDefined();
   });
+
+  test("one-line fenced code keeps its content", () => {
+    const result = textToRichTextBlocks("```hello```", { includeInlineFormatting: true })!;
+    expect(result[0]!.elements).toEqual([
+      { type: "rich_text_preformatted", elements: [{ type: "text", text: "hello" }] },
+    ]);
+  });
+
+  test("one-line fenced code does not swallow the next line", () => {
+    const result = textToRichTextBlocks("```hello```\nnext line", {
+      includeInlineFormatting: true,
+    })!;
+    expect(result[0]!.elements).toEqual([
+      { type: "rich_text_preformatted", elements: [{ type: "text", text: "hello" }] },
+      { type: "rich_text_section", elements: [{ type: "text", text: "next line\n" }] },
+    ]);
+  });
+
+  test("an existing Slack link with a CommonMark-looking label keeps its label", () => {
+    expect(parseInlineElements("see <https://example.com|[label](https://other.example)>")).toEqual(
+      [
+        { type: "text", text: "see " },
+        { type: "link", url: "https://example.com", text: "[label](https://other.example)" },
+      ],
+    );
+  });
 });

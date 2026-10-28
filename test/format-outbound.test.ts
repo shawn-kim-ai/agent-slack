@@ -106,6 +106,12 @@ describe("formatOutboundSlackText", () => {
     expect(formatOutboundSlackText("")).toBe("");
   });
 
+  test("leaves an existing Slack link with a CommonMark-looking label alone", () => {
+    expect(
+      formatOutboundSlackText("see <https://example.com|[label](https://other.example)>"),
+    ).toBe("see <https://example.com|[label](https://other.example)>");
+  });
+
   test("real-world CI dump stays readable with mention + URL", () => {
     const input =
       '@U05BRPTKL6A heads up: CI "Install dependencies" is failing: https://github.com/x/y/actions/runs/1 & it needs <fix>';
