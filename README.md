@@ -147,6 +147,11 @@ export SLACK_COOKIE_D="xoxd-..."   # cookie d
 agent-slack auth test
 ```
 
+Browser API calls send credentials only to the canonical HTTPS workspace origin under
+`slack.com`. Other hosts, non-default ports, and non-HTTPS origins are rejected before tokens
+or cookies are sent, and redirects are refused. File downloads send the browser token and cookie
+to the Slack-provided file URL and are not covered.
+
 Or use a standard Slack token (xoxb/xoxp):
 
 ```bash
