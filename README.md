@@ -147,8 +147,9 @@ export SLACK_COOKIE_D="xoxd-..."   # cookie d
 agent-slack auth test
 ```
 
-Browser authentication accepts only canonical HTTPS workspace origins under `slack.com`; paths,
-credentials, ports, and lookalike domains are rejected before tokens or cookies are sent.
+Browser authentication sends credentials only to canonical HTTPS workspace origins under
+`slack.com`; other hosts, non-default ports, and non-HTTPS origins are rejected before tokens
+or cookies are sent.
 
 Or use a standard Slack token (xoxb/xoxp):
 
