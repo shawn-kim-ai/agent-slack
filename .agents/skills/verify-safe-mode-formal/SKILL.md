@@ -17,11 +17,11 @@ One command from the repo root. The full run takes about 5 seconds for 27 CLI sp
 .agents/skills/verify-safe-mode-formal/run.sh
 ```
 
-Exit 0 means every cell passed. Exit 1 names each failing cell with what the stub Slack server observed. While FINDING-001 below is open, the expected result on main is 25/27 with exit 1. That is the finding showing, not a broken harness. No installs, no sudo, no network beyond localhost. The check never touches real credentials. Every cell runs the CLI with a blank temp HOME and fake `SLACK_TOKEN`/`SLACK_COOKIE_D` against a stub Slack server on 127.0.0.1.
+Exit 0 means every cell passed. Exit 1 names each failing cell with what the stub Slack server observed. If any control cell fails, the verdict is `Harness invalid` instead of a property claim: blind controls mean the result is unknown. While FINDING-001 below is open, the expected result on main is 25/27 with exit 1. That is the finding showing, not a broken harness. No installs, no sudo, no network beyond localhost. The check never touches real credentials. Every cell runs the CLI with a blank temp HOME and fake `SLACK_TOKEN`/`SLACK_COOKIE_D` against a stub Slack server on 127.0.0.1, routed through `https://fixture.slack.com`: a fetch shim loaded with `bun --preload` rewrites that origin to the stub and refuses any other host, so a misrouted call fails loudly instead of reaching real Slack.
 
 ## What it does
 
-The check runs 27 cells. Each cell runs the real CLI (`bun src/index.ts`, the same entry the build compiles) with a stub Slack server recording every API method.
+The check runs 27 cells. Each cell runs the real CLI (`bun --preload <shim> src/index.ts`, the same entry the build compiles) with `SLACK_WORKSPACE_URL=https://fixture.slack.com`; the shim rewrites that origin to a stub Slack server on 127.0.0.1 recording every API method. Before the matrix, a preflight call proves the shim routes to the stub. If it fails, the check stops as harness-invalid without running any cell. Editor cells read the session token from the printed editor URL when one is present and send it back the way the browser does, so the same cells drive the editor with and without session tokens.
 
 - Core: send, edit, delete, compose, each with safe mode on via `--safe-mode` and via `AGENT_SLACK_SAFE_MODE=1`, each with and without `CI`. Safe-mode cells assert zero write calls reach the stub. Editor cells drive the real draft editor server and cancel it. CI cells assert the command fails closed.
 - Send-flag rejections: `--attach`, `--blocks`, `--schedule`, `--schedule-in`, `--reply-broadcast` under safe mode assert the redirect rejects the flags before anything posts.
@@ -45,7 +45,7 @@ Sync commit: `adda22908cecb3fbb53be7b44b8c1e0876d6688b`. The check describes the
 
 A property cell that fails with `writes=[...]` is a real break until proven otherwise. It names the exact Slack write that escaped. The usual cause is a dispatch change that added a path around a gate, moved a gate after a sink, or taught the editor skip a new condition. Fix the code, not the cell.
 
-A failing control means the harness is blind, not that the product broke. Suspect the stub first: a new required read API the stub answers poorly, a changed CLI entry path, or a changed editor handshake. Fix `check.ts`, re-run, and only then read the property cells.
+A failing control means the harness is blind, not that the product broke, so the check reports `Harness invalid` and no property verdict. Suspect the stub first: a new required read API the stub answers poorly, a changed CLI entry path, or a changed editor handshake. Fix the harness, re-run, and only then read the property cells.
 
 `timed out waiting for draft editor to open` on an editor cell means the CLI exited without opening the editor. The `writes so far` field shows whether it posted instead.
 

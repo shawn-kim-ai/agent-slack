@@ -24,6 +24,8 @@ type CellResult = {
 
 const CHANNEL_ID = "C12345678";
 const MESSAGE_TS = "1770000000.000001";
+const FIXTURE_WORKSPACE_URL = "https://fixture.slack.com";
+const PRELOAD = join(import.meta.dir, "preload.ts");
 
 const WRITE_METHODS = new Set([
   "chat.postMessage",
@@ -327,12 +329,13 @@ async function runCell(input: {
   }
   env.SLACK_TOKEN = "xoxc-verify";
   env.SLACK_COOKIE_D = "verify";
-  env.SLACK_WORKSPACE_URL = stubUrl;
+  env.SLACK_WORKSPACE_URL = FIXTURE_WORKSPACE_URL;
+  env.VERIFY_SAFE_MODE_STUB_URL = stubUrl;
   env.HOME = home;
   env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
   env.AGENT_SLACK_NO_UPDATE_CHECK = "1";
   env.AGENT_SLACK_COMMAND_TIMEOUT_MS = "60000";
-  const proc = Bun.spawn([process.execPath, "src/index.ts", ...argv], {
+  const proc = Bun.spawn([process.execPath, "--preload", PRELOAD, "src/index.ts", ...argv], {
     cwd: root,
     env,
     stdout: "pipe",
@@ -350,18 +353,21 @@ async function runCell(input: {
       const { done, value } = await reader.read();
       if (value) {
         stderr += decoder.decode(value, { stream: true });
-        const editorMatch = stderr.match(/Draft editor: (http:\/\/127\.0\.0\.1:\d+)/);
+        const editorMatch = stderr.match(/Draft editor: (http:\/\/127\.0\.0\.1:\d+\S*)/);
         if (editorMatch?.[1] && !editorUrl) {
-          const [, url] = editorMatch;
-          editorUrl = url;
+          const [, page] = editorMatch;
+          const editorPage = new URL(page);
+          editorUrl = editorPage.origin;
+          const token = editorPage.searchParams.get("t");
+          const headers: Record<string, string> = token ? { "x-draft-token": token } : {};
           if (cell.editor === "cancel") {
             editorAction = "cancel";
-            await fetch(`${editorUrl}/cancel`, { method: "POST" });
+            await fetch(`${editorUrl}/cancel`, { method: "POST", headers });
           } else if (cell.editor === "send") {
             editorAction = "send";
             await fetch(`${editorUrl}/send`, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...headers },
               body: JSON.stringify({ text: "human approved text" }),
             });
           }
@@ -433,6 +439,46 @@ async function runCell(input: {
   return { cell, pass: true, detail: observed };
 }
 
+async function runPreflight(input: {
+  stubUrl: string;
+  recorded: string[];
+}): Promise<string | null> {
+  const { stubUrl, recorded } = input;
+  recorded.length = 0;
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      env[name] = value;
+    }
+  }
+  env.VERIFY_SAFE_MODE_STUB_URL = stubUrl;
+  const proc = Bun.spawn(
+    [
+      process.execPath,
+      "--preload",
+      PRELOAD,
+      "-e",
+      `const r = await fetch("${FIXTURE_WORKSPACE_URL}/api/preflight", { method: "POST" }); if (!r.ok) throw new Error("preflight got " + r.status);`,
+    ],
+    { env, stdout: "pipe", stderr: "pipe" },
+  );
+  let exitCode: number;
+  try {
+    exitCode = await withTimeout({ promise: proc.exited, ms: 15000, what: "preload self-check" });
+  } catch (error) {
+    proc.kill();
+    return error instanceof Error ? error.message : String(error);
+  }
+  const stderr = await new Response(proc.stderr).text();
+  if (exitCode !== 0) {
+    return `exit=${exitCode}; stderr: ${stderr.trim()}`;
+  }
+  if (!recorded.includes("preflight")) {
+    return `exit=0 but the stub observed [${recorded.join(", ")}]`;
+  }
+  return null;
+}
+
 function makeFakeBin(dir: string): string {
   const fakeBin = join(dir, "fakebin");
   mkdirSync(fakeBin, { recursive: true });
@@ -457,6 +503,12 @@ const scheduleAt = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
 
 const recorded: string[] = [];
 const stub = startStub(recorded);
+const preflightError = await runPreflight({ stubUrl: stub.url, recorded });
+if (preflightError !== null) {
+  console.log(`Harness invalid: preload self-check failed (${preflightError}).`);
+  stub.stop();
+  process.exit(1);
+}
 const fakeBin = makeFakeBin(workdir);
 const results: CellResult[] = [];
 try {
@@ -472,8 +524,15 @@ try {
 const failures = results.filter((r) => !r.pass);
 console.log(`\n${results.length - failures.length}/${results.length} cells passed.`);
 if (failures.length > 0) {
-  console.log(
-    "Property violated: with safe mode enabled, a message-posting command posted without human review.",
-  );
+  const blind = failures.filter((r) => r.cell.safeMode === "off");
+  if (blind.length > 0) {
+    console.log(
+      `Harness invalid: ${blind.length} control cell(s) failed (${blind.map((r) => r.cell.name).join(", ")}), so the result is unknown. Fix the harness before reading the property cells.`,
+    );
+  } else {
+    console.log(
+      "Property violated: with safe mode enabled, a message-posting command posted without human review.",
+    );
+  }
   process.exit(1);
 }
