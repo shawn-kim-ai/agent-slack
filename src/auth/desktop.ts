@@ -378,8 +378,6 @@ export async function extractFromSlackDesktop(
       };
     } catch (err: unknown) {
       errors.push(`${baseDir}: ${err instanceof Error ? err.message : String(err)}`);
-      // Every profile reads the same keychain items: after a timeout or
-      // denial, trying the next one would only prompt (and wait) again.
       if (err instanceof KeychainAccessError) {
         throw new KeychainAccessError(formatDesktopExtractionErrors(errors));
       }

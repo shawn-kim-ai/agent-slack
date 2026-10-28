@@ -23,9 +23,7 @@ export function* getSafeStoragePasswords(
     // Electron ("Slack Key") and Mac App Store ("Slack App Store Key") builds
     // store separate Safe Storage passwords under the same service name.
     // Query each known account explicitly, then fall back to service-only
-    // lookups to catch unknown account names. Passwords are yielded lazily so
-    // the caller stops at the first one that decrypts the cookie, instead of
-    // prompting for every item (e.g. "Chrome Safe Storage").
+    // lookups to catch unknown account names.
     const keychainQueries: KeychainQuery[] = [
       { service: "Slack Safe Storage", account: "Slack Key" },
       { service: "Slack Safe Storage", account: "Slack App Store Key" },
@@ -57,7 +55,7 @@ export function* getSafeStoragePasswords(
         const out = execFileSync("secret-tool", ["lookup", ...pair], {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
-          timeout: getKeychainTimeoutMs(options),
+          timeout: getKeychainTimeoutMs(),
         }).trim();
         if (out) {
           passwords.push(out);

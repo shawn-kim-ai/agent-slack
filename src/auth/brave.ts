@@ -207,8 +207,6 @@ export async function extractFromBrave(
     if (err instanceof BraveAppleScriptDisabledError) {
       throw err;
     }
-    // Surface keychain timeouts/denials when the user explicitly ran the
-    // import; implicit lookups keep falling back to other sources.
     if (options.interactive && err instanceof KeychainAccessError) {
       throw err;
     }

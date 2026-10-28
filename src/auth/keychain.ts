@@ -3,16 +3,11 @@ import { execFileSync } from "node:child_process";
 
 const IS_MACOS = platform() === "darwin";
 const DEFAULT_KEYCHAIN_TIMEOUT_MS = 3_000;
-// Explicit `auth import-*` commands can trigger a macOS keychain prompt
-// ("security wants to use your confidential information..."). The user needs
-// time to type their login password, so don't kill `security` after 3s.
 const INTERACTIVE_KEYCHAIN_TIMEOUT_MS = 120_000;
-// `security` exits with errSecItemNotFound (-25300) truncated to a byte.
+// 44 is the low byte of Apple's errSecItemNotFound (-25300).
 const SECURITY_EXIT_ITEM_NOT_FOUND = 44;
 
 export type KeychainOptions = {
-  // True when the user explicitly asked for the import and can answer a
-  // keychain prompt; false for implicit lookups (e.g. auth auto-refresh).
   interactive?: boolean;
 };
 
@@ -23,8 +18,6 @@ export type KeychainReadResult =
   | { ok: false; notFound: true }
   | { ok: false; notFound: false; message: string };
 
-// A keychain item exists but could not be read: the prompt timed out or the
-// user denied it. Unlike "item not found", the user needs to act on this.
 export class KeychainAccessError extends Error {
   override name = "KeychainAccessError";
 }
@@ -113,7 +106,6 @@ export function readMacKeychainPassword(
 export function* macKeychainPasswords(
   queries: KeychainQuery[],
   options: KeychainOptions & {
-    // Injectable for tests.
     read?: (query: KeychainQuery, options: KeychainOptions) => KeychainReadResult;
   } = {},
 ): Generator<string, void, undefined> {
