@@ -37,8 +37,10 @@ export function formatOutboundSlackText(text: string): string {
   let out = text.replace(SLACK_TOKEN_PATTERN, stashToken);
 
   // Rewrite CommonMark links as Slack manual links, leaving code untouched.
+  // A placeholder in the URL means the original held a `<...>` token there,
+  // which the matcher forbids, so that span stays literal.
   out = out.replace(CODE_OR_LINK_PATTERN, (m, label?: string, url?: string) =>
-    label != null && url != null ? `<${url}|${escapeMrkdwn(label)}>` : m,
+    label != null && url != null && !url.includes("\u0000") ? `<${url}|${escapeMrkdwn(label)}>` : m,
   );
 
   // Protect the rewritten tokens so `<`/`>` inside them aren't escaped.
