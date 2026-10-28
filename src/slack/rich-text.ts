@@ -195,7 +195,10 @@ export function textToRichTextBlocks(
         const trailing = rest.slice(closing + 3).trim();
         idx++;
         if (trailing) {
-          lines.splice(idx, 0, trailing);
+          elements.push({
+            type: "rich_text_section",
+            elements: parseInlineElements(`${trailing}\n`),
+          });
         }
         continue;
       }

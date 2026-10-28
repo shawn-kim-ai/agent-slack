@@ -56,8 +56,11 @@ export function formatOutboundSlackText(text: string): string {
     (_m, pre, name) => `${pre}<!${name}>`,
   );
 
-  // Restore protected tokens.
-  out = out.replace(/\u0000(\d+)\u0000/g, (_m, idx) => stash[Number(idx)]!);
+  // Restore protected tokens twice: a rewritten token can nest a placeholder
+  // for a token stashed before the rewrite.
+  for (let pass = 0; pass < 2; pass++) {
+    out = out.replace(/\u0000(\d+)\u0000/g, (_m, idx) => stash[Number(idx)]!);
+  }
 
   return out;
 }
