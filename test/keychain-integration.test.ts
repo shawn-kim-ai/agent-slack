@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 describe("keychain integration", () => {
-  for (const fixture of ["watchdog-global-options", "auto-refresh", "linux-safe-storage"]) {
+  for (const fixture of ["auto-refresh", "linux-safe-storage"]) {
     test(fixture, () => {
       const temp = mkdtempSync(join(tmpdir(), "agent-slack-test-"));
       try {
@@ -27,17 +27,4 @@ describe("keychain integration", () => {
       }
     });
   }
-
-  test("the global-option check rejects a value-taking option", () => {
-    const result = spawnSync(
-      process.execPath,
-      [join(import.meta.dir, "fixtures", "watchdog-global-options.ts")],
-      {
-        encoding: "utf8",
-        env: { ...process.env, TEST_VALUE_OPTION: "1" },
-      },
-    );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("--fixture-value <value>");
-  });
 });

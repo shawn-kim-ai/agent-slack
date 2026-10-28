@@ -1,6 +1,8 @@
 export function shouldStartCommandWatchdog(args: string[], platform = process.platform): boolean {
   const firstPositional = platform === "darwin" ? args.findIndex((arg) => !arg.startsWith("-")) : 0;
-  const [command, subcommand] = firstPositional === -1 ? [] : args.slice(firstPositional);
+  const positional = firstPositional === -1 ? [] : args.slice(firstPositional);
+  const [command, subcommand] =
+    platform === "darwin" ? positional.filter((arg) => arg !== "--safe-mode") : positional;
   if (!command || command === "update") {
     return false;
   }

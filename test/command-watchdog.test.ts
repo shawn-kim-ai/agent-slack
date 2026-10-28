@@ -29,6 +29,13 @@ describe("shouldStartCommandWatchdog", () => {
     ).toBe(false);
   });
 
+  test("ignores safe mode between auth and the import command", () => {
+    for (const command of ["import-desktop", "import-brave"]) {
+      expect(shouldStartCommandWatchdog(["auth", "--safe-mode", command], "darwin")).toBe(false);
+    }
+    expect(shouldStartCommandWatchdog(["auth", "--safe-mode", "list"], "darwin")).toBe(true);
+  });
+
   test("keeps the watchdog on for imports outside macOS", () => {
     for (const platform of ["linux", "win32"] as const) {
       expect(shouldStartCommandWatchdog(["auth", "import-desktop"], platform)).toBe(true);

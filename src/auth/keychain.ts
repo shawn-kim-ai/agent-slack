@@ -96,13 +96,6 @@ export function readMacKeychainPassword(
   }
 }
 
-/**
- * Lazily yield the distinct passwords found for `queries`, in order, so that
- * callers can stop at the first one that works without triggering further
- * keychain prompts. Missing items are skipped. A timeout or denial stops the
- * lookup and throws: the user didn't (or wouldn't) answer the prompt, so more
- * prompts would only add noise.
- */
 export function* macKeychainPasswords(
   queries: KeychainQuery[],
   options: KeychainOptions & {
@@ -120,7 +113,7 @@ export function* macKeychainPasswords(
       }
       continue;
     }
-    if (!result.notFound) {
+    if (!result.notFound && options.interactive) {
       throw new KeychainAccessError(result.message);
     }
   }

@@ -105,10 +105,19 @@ describe("macKeychainPasswords", () => {
       "Slack Safe Storage/Slack Key": { ok: false, notFound: false, message: "Timed out" },
       "Chrome Safe Storage": { ok: true, value: "chrome-pw" },
     });
-    expect(() => [...macKeychainPasswords([SLACK_KEY, CHROME], { read })]).toThrow(
-      KeychainAccessError,
-    );
+    expect(() => [
+      ...macKeychainPasswords([SLACK_KEY, CHROME], { read, interactive: true }),
+    ]).toThrow(KeychainAccessError);
     expect(calls).toEqual(["Slack Safe Storage/Slack Key"]);
+  });
+
+  test("continues to a working password after an access failure in the background", () => {
+    const { calls, read } = fakeReader({
+      "Slack Safe Storage/Slack Key": { ok: false, notFound: false, message: "Denied" },
+      "Chrome Safe Storage": { ok: true, value: "chrome-pw" },
+    });
+    expect([...macKeychainPasswords([SLACK_KEY, CHROME], { read })]).toEqual(["chrome-pw"]);
+    expect(calls).toEqual(["Slack Safe Storage/Slack Key", "Chrome Safe Storage"]);
   });
 
   test("throws a plain error listing what was looked for when nothing exists", () => {
