@@ -26,6 +26,7 @@ export type SlackDraft = {
   date_created?: number;
   date_scheduled?: number;
   file_ids?: string[];
+  is_sent?: boolean;
 };
 
 /**
@@ -103,6 +104,7 @@ export function parseDraftRecord(raw: unknown): SlackDraft | null {
     date_created: getNumber(raw.date_created),
     date_scheduled: dateScheduled && dateScheduled > 0 ? dateScheduled : undefined,
     file_ids: fileIds.length > 0 ? fileIds : undefined,
+    is_sent: raw.is_sent === true ? true : undefined,
   };
 }
 
@@ -188,8 +190,10 @@ export async function createDraft(
 ): Promise<SlackDraft | null> {
   const resp = await client.api("drafts.create", {
     ...buildDraftBody(input),
-    // Sent on create only, matching the official client's behavior.
-    is_from_composer: true,
+    // Sent on create only. Slack's message box sends `false`, which ties the
+    // draft to its channel or thread; `true` puts a thread reply in the
+    // channel's main message box.
+    is_from_composer: false,
   });
   ensureDraftOk("drafts.create", resp);
   return parseDraftRecord(resp.draft);
