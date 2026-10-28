@@ -184,6 +184,21 @@ export function textToRichTextBlocks(
 
     // Code block
     if (CODE_BLOCK_START.test(line)) {
+      const rest = line.slice(3);
+      const closing = rest.indexOf("```");
+      if (closing !== -1) {
+        elements.push({
+          type: "rich_text_preformatted",
+          elements: [{ type: "text", text: rest.slice(0, closing) }],
+        });
+        hasFormatting = true;
+        const trailing = rest.slice(closing + 3).trim();
+        idx++;
+        if (trailing) {
+          lines.splice(idx, 0, trailing);
+        }
+        continue;
+      }
       idx++; // skip opening ```
       const codeLines: string[] = [];
       while (idx < lines.length && !CODE_BLOCK_START.test(lines[idx]!)) {

@@ -19,25 +19,30 @@ const CODE_OR_LINK_PATTERN = new RegExp(
   "g",
 );
 
+const SLACK_TOKEN_PATTERN =
+  /<(?:@[UWB][A-Z0-9]+(?:\|[^>]*)?|#[CG][A-Z0-9]+(?:\|[^>]*)?|!subteam\^[A-Z0-9]+(?:\|[^>]*)?|![a-zA-Z]+(?:\|[^>]*)?|(?:https?:\/\/|mailto:)[^>]+)>/g;
+
 export function formatOutboundSlackText(text: string): string {
   if (!text) {
     return "";
   }
 
+  // Protect already-formatted Slack tokens first, so the CommonMark rewrite
+  // below cannot match inside them.
+  const stash: string[] = [];
+  const stashToken = (m: string): string => {
+    stash.push(m);
+    return `\u0000${stash.length - 1}\u0000`;
+  };
+  let out = text.replace(SLACK_TOKEN_PATTERN, stashToken);
+
   // Rewrite CommonMark links as Slack manual links, leaving code untouched.
-  let out = text.replace(CODE_OR_LINK_PATTERN, (m, label?: string, url?: string) =>
+  out = out.replace(CODE_OR_LINK_PATTERN, (m, label?: string, url?: string) =>
     label != null && url != null ? `<${url}|${escapeMrkdwn(label)}>` : m,
   );
 
-  // Protect already-formatted Slack tokens so `<`/`>` inside them aren't escaped.
-  const stash: string[] = [];
-  out = out.replace(
-    /<(?:@[UWB][A-Z0-9]+(?:\|[^>]*)?|#[CG][A-Z0-9]+(?:\|[^>]*)?|!subteam\^[A-Z0-9]+(?:\|[^>]*)?|![a-zA-Z]+(?:\|[^>]*)?|(?:https?:\/\/|mailto:)[^>]+)>/g,
-    (m) => {
-      stash.push(m);
-      return `\u0000${stash.length - 1}\u0000`;
-    },
-  );
+  // Protect the rewritten tokens so `<`/`>` inside them aren't escaped.
+  out = out.replace(SLACK_TOKEN_PATTERN, stashToken);
 
   // Escape literal HTML-ish characters per Slack's mrkdwn rules.
   out = escapeMrkdwn(out);
