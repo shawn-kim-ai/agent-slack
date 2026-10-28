@@ -298,6 +298,51 @@ describe("search referenced users", () => {
     ).toEqual([undefined, "page-2", "page-3"]);
   });
 
+  test("searchSlack stops paging at the after-date boundary", async () => {
+    const calls: ApiCall[] = [];
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method === "conversations.info") {
+          return { channel: { id: String(params.channel), name: "general" } };
+        }
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor !== undefined) {
+          throw new Error("history page past the after boundary must not be requested");
+        }
+        return {
+          response_metadata: { next_cursor: "page-2" },
+          messages: [
+            { ts: "1700086400.000001", text: "needle fresh", user: "U11111111" },
+            { ts: "1699900000.000001", text: "needle stale", user: "U11111111" },
+          ],
+        };
+      },
+    };
+
+    const result = await searchSlack({
+      client: client as never,
+      auth: { auth_type: "standard", token: "x" },
+      options: {
+        workspace_url: "https://workspace.slack.com",
+        query: "needle",
+        kind: "messages",
+        channels: ["C12345678"],
+        after: "2023-11-15",
+        limit: 20,
+        max_content_chars: 4000,
+        content_type: "any",
+        download: false,
+      },
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages?.[0]?.content).toBe("needle fresh");
+    expect(calls.filter((call) => call.method === "conversations.history")).toHaveLength(1);
+  });
+
   test("searchSlack does not resolve users at the result limit without opt-in", async () => {
     const calls: ApiCall[] = [];
     const client = createClient(calls) as never;
