@@ -1,3 +1,5 @@
+import { COMMONMARK_LINK_SOURCE } from "./markdown-links.ts";
+
 type InlineStyle = { bold?: true; italic?: true; strike?: true; code?: true };
 
 type InlineElement =
@@ -43,12 +45,36 @@ const BLOCKQUOTE_RE = /^> (.*)$/;
 /**
  * Parse mrkdwn inline formatting into Slack rich_text inline elements.
  *
- * Handles: *bold*, _italic_, ~strike~, `code`, :emoji:, <url|label>, <url>
+ * Handles: *bold*, _italic_, ~strike~, `code`, :emoji:, <url|label>, <url>,
+ * and CommonMark [label](url) links. A rejected [label](url) span or a bare
+ * URL stays literal text, so emphasis never parses inside it.
  */
+const INLINE_PATTERN = new RegExp(
+  [
+    "`([^`]+)`",
+    COMMONMARK_LINK_SOURCE,
+    // A rejected span consumes one paren level like a valid link, so a `)`
+    // inside the URL cannot end the span early and expose its tail.
+    "(\\[[^\\]\\n]+\\]\\((?:https?:\\/\\/|mailto:)(?:\\([^()\\s]*\\)|[^)\\s])*\\)|(?:https?:\\/\\/|mailto:)[^\\s<>]+)",
+    "(?:^|(?<=[^A-Za-z0-9_])):([a-zA-Z0-9_+-]+):(?![A-Za-z0-9_+-])",
+    "\\*([^*]+)\\*",
+    "_([^_]+)_",
+    "~([^~]+)~",
+    "<@([UWB][A-Z0-9]+)(?:\\|[^>]*)?>",
+    "<#([CG][A-Z0-9]+)(?:\\|[^>]*)?>",
+    "<!subteam\\^([A-Z0-9]+)(?:\\|[^>]*)?>",
+    "<!(here|channel|everyone)(?:\\|[^>]*)?>",
+    "<([^>|]+)\\|([^>]+)>",
+    "<([^>|]+)>",
+    "(?:^|(?<=[^A-Za-z0-9_]))@([UWB][A-Z0-9]{6,})\\b",
+    "(?:^|(?<=[^A-Za-z0-9_]))@(here|channel|everyone)\\b",
+  ].join("|"),
+  "g",
+);
+
 export function parseInlineElements(text: string): InlineElement[] {
   const elements: InlineElement[] = [];
-  const re =
-    /`([^`]+)`|(?:^|(?<=[^A-Za-z0-9_])):([a-zA-Z0-9_+-]+):(?![A-Za-z0-9_+-])|\*([^*]+)\*|_([^_]+)_|~([^~]+)~|<@([UWB][A-Z0-9]+)(?:\|[^>]*)?>|<#([CG][A-Z0-9]+)(?:\|[^>]*)?>|<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>|<!(here|channel|everyone)(?:\|[^>]*)?>|<([^>|]+)\|([^>]+)>|<([^>|]+)>|(?:^|(?<=[^A-Za-z0-9_]))@([UWB][A-Z0-9]{6,})\b|(?:^|(?<=[^A-Za-z0-9_]))@(here|channel|everyone)\b/g;
+  const re = new RegExp(INLINE_PATTERN);
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -59,13 +85,12 @@ export function parseInlineElements(text: string): InlineElement[] {
   };
 
   while ((match = re.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      pushText(text.slice(lastIndex, match.index));
-    }
-
     const [
       ,
       code,
+      mdLinkText,
+      mdLinkUrl,
+      literalSpan,
       emojiName,
       bold,
       italic,
@@ -80,8 +105,16 @@ export function parseInlineElements(text: string): InlineElement[] {
       bareUserId,
       bareBroadcast,
     ] = match;
+    if (literalSpan != null) {
+      continue;
+    }
+    if (match.index > lastIndex) {
+      pushText(text.slice(lastIndex, match.index));
+    }
     if (code != null) {
       elements.push({ type: "text", text: code, style: { code: true } });
+    } else if (mdLinkText != null && mdLinkUrl != null) {
+      elements.push({ type: "link", url: mdLinkUrl, text: mdLinkText });
     } else if (emojiName != null) {
       elements.push({ type: "emoji", name: emojiName });
     } else if (bold != null) {
@@ -154,6 +187,24 @@ export function textToRichTextBlocks(
     // Code block
     if (CODE_BLOCK_START.test(line)) {
       orderedCounts.clear();
+      const rest = line.slice(3);
+      const closing = rest.indexOf("```");
+      if (closing !== -1) {
+        elements.push({
+          type: "rich_text_preformatted",
+          elements: [{ type: "text", text: rest.slice(0, closing) }],
+        });
+        hasFormatting = true;
+        const trailing = rest.slice(closing + 3).trim();
+        idx++;
+        if (trailing) {
+          elements.push({
+            type: "rich_text_section",
+            elements: parseInlineElements(`${trailing}\n`),
+          });
+        }
+        continue;
+      }
       idx++; // skip opening ```
       const codeLines: string[] = [];
       while (idx < lines.length && !CODE_BLOCK_START.test(lines[idx]!)) {

@@ -319,6 +319,39 @@ function getResponseNumber(value: unknown): number | undefined {
   return undefined;
 }
 
+// Unlike chat.postMessage, chat.update escapes `<` and `>` in `text` when
+// no blocks are given, so links and mentions need rich_text blocks to
+// render. Plain emphasis renders fine as mrkdwn, and the inline parser
+// drops nested styles, so blocks carrying only styled text go out as text.
+function editBlocksForText(text: string) {
+  if (!text) {
+    return null;
+  }
+  const blocks = textToRichTextBlocks(text, { includeInlineFormatting: true });
+  if (!blocks) {
+    return null;
+  }
+  for (const block of blocks) {
+    for (const element of block.elements) {
+      if (element.type === "rich_text_list") {
+        return blocks;
+      }
+      for (const inline of element.elements) {
+        if (
+          inline.type === "link" ||
+          inline.type === "user" ||
+          inline.type === "channel" ||
+          inline.type === "usergroup" ||
+          inline.type === "broadcast"
+        ) {
+          return blocks;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export async function editMessage(input: {
   ctx: CliContext;
   targetInput: string;
@@ -335,9 +368,7 @@ export async function editMessage(input: {
   const formattedText = formatOutboundSlackText(input.text);
   const blocks = input.options.blocks
     ? loadBlocksFromPath(input.options.blocks)
-    : input.text
-      ? textToRichTextBlocks(input.text)
-      : null;
+    : editBlocksForText(input.text);
 
   await input.ctx.withAutoRefresh({
     workspaceUrl: target.kind === "url" ? target.ref.workspace_url : workspaceUrl,

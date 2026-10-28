@@ -955,7 +955,124 @@ describe("editMessage", () => {
     ]);
   });
 
-  test("edits a message URL with a link label without blocks", async () => {
+  test("edits a CommonMark link with token-breaking URL characters as plain text", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const ctx = createContext(calls);
+
+    await editMessage({
+      ctx,
+      targetInput: "C12345678",
+      text: "see [x](https://ex.com/a>b)",
+      options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "see [x](https://ex.com/a&gt;b)",
+        },
+      },
+    ]);
+  });
+
+  test("edits a bare URL with underscores as plain text without blocks", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const ctx = createContext(calls);
+
+    await editMessage({
+      ctx,
+      targetInput: "C12345678",
+      text: "see https://github.com/my_org/my_repo",
+      options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "see https://github.com/my_org/my_repo",
+        },
+      },
+    ]);
+  });
+
+  test("edits a rejected CommonMark span with underscores as plain text", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const ctx = createContext(calls);
+
+    await editMessage({
+      ctx,
+      targetInput: "C12345678",
+      text: "see [x](https://ex.com/a_b|c_d)",
+      options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "see [x](https://ex.com/a_b|c_d)",
+        },
+      },
+    ]);
+  });
+
+  test("edits nested emphasis as plain text so Slack renders both styles", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const ctx = createContext(calls);
+
+    await editMessage({
+      ctx,
+      targetInput: "C12345678",
+      text: "This is *bold _and italic_*",
+      options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "This is *bold _and italic_*",
+        },
+      },
+    ]);
+  });
+
+  test("edits a link nested in emphasis as plain text without blocks", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const ctx = createContext(calls);
+
+    await editMessage({
+      ctx,
+      targetInput: "C12345678",
+      text: "Review *[PR](https://example.com)*",
+      options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "Review *<https://example.com|PR>*",
+        },
+      },
+    ]);
+  });
+
+  // chat.update escapes `<`/`>` in `text` when no blocks are sent, so links
+  // and mentions must be carried by rich_text blocks to render.
+  test("edits a message URL with a link label using rich text blocks", async () => {
     const calls: { method: string; params: Record<string, unknown> }[] = [];
     const ctx = createContext(calls);
 
@@ -971,7 +1088,21 @@ describe("editMessage", () => {
     expect(calls[0]?.params.channel).toBe("C12345678");
     expect(calls[0]?.params.ts).toBe("1770165109.628379");
     expect(calls[0]?.params.text).toBe("Visit <https://example.com|Example>");
-    expect(calls[0]?.params.blocks).toBeUndefined();
+    expect(calls[0]?.params.blocks).toEqual([
+      {
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_section",
+            elements: [
+              { type: "text", text: "Visit " },
+              { type: "link", url: "https://example.com", text: "Example" },
+              { type: "text", text: "\n" },
+            ],
+          },
+        ],
+      },
+    ]);
   });
 
   test("edits an inline mailto link without escaping it", async () => {
@@ -988,7 +1119,21 @@ describe("editMessage", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe("chat.update");
     expect(calls[0]?.params.text).toBe("Email <mailto:bob@example.com|Bob>");
-    expect(calls[0]?.params.blocks).toBeUndefined();
+    expect(calls[0]?.params.blocks).toEqual([
+      {
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_section",
+            elements: [
+              { type: "text", text: "Email " },
+              { type: "link", url: "mailto:bob@example.com", text: "Bob" },
+              { type: "text", text: "\n" },
+            ],
+          },
+        ],
+      },
+    ]);
   });
 
   test("edits an inline usergroup mention without escaping it", async () => {
@@ -1005,10 +1150,24 @@ describe("editMessage", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe("chat.update");
     expect(calls[0]?.params.text).toBe("Ping <!subteam^S12345678|@team>");
-    expect(calls[0]?.params.blocks).toBeUndefined();
+    expect(calls[0]?.params.blocks).toEqual([
+      {
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_section",
+            elements: [
+              { type: "text", text: "Ping " },
+              { type: "usergroup", usergroup_id: "S12345678" },
+              { type: "text", text: "\n" },
+            ],
+          },
+        ],
+      },
+    ]);
   });
 
-  test("edits a channel target with inline formatting without blocks", async () => {
+  test("edits plain emphasis as text without blocks", async () => {
     const calls: { method: string; params: Record<string, unknown> }[] = [];
     const ctx = createContext(calls);
 
@@ -1019,10 +1178,16 @@ describe("editMessage", () => {
       options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
     });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.method).toBe("chat.update");
-    expect(calls[0]?.params.text).toBe("Update *now*");
-    expect(calls[0]?.params.blocks).toBeUndefined();
+    expect(calls).toEqual([
+      {
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "Update *now*",
+        },
+      },
+    ]);
   });
 
   test("edits a channel target with rich text blocks when text contains a list", async () => {

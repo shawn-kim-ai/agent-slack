@@ -28,6 +28,58 @@ describe("formatOutboundSlackText", () => {
     );
   });
 
+  test("rewrites CommonMark links as Slack manual links", () => {
+    expect(formatOutboundSlackText("see [PR #42](https://example.com/pull/42)")).toBe(
+      "see <https://example.com/pull/42|PR #42>",
+    );
+    expect(formatOutboundSlackText("mail [Bob](mailto:bob@example.com)")).toBe(
+      "mail <mailto:bob@example.com|Bob>",
+    );
+    expect(formatOutboundSlackText("[a <b> & c](https://example.com)")).toBe(
+      "<https://example.com|a &lt;b&gt; &amp; c>",
+    );
+  });
+
+  test("preserves balanced parentheses inside a CommonMark link URL", () => {
+    expect(formatOutboundSlackText("See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now")).toBe(
+      "See <https://en.wikipedia.org/wiki/Foo_(bar)|Foo> now",
+    );
+  });
+
+  test("leaves CommonMark links with token-breaking URL characters alone", () => {
+    expect(formatOutboundSlackText("see [x](https://ex.com/a>b)")).toBe(
+      "see [x](https://ex.com/a&gt;b)",
+    );
+    expect(formatOutboundSlackText("see [x](https://ex.com/a|b)")).toBe(
+      "see [x](https://ex.com/a|b)",
+    );
+    expect(formatOutboundSlackText("see [x](https://ex.com/a<b)")).toBe(
+      "see [x](https://ex.com/a&lt;b)",
+    );
+  });
+
+  test("keeps pipes in CommonMark link labels", () => {
+    expect(formatOutboundSlackText("see [a|b](https://example.com)")).toBe(
+      "see <https://example.com|a|b>",
+    );
+  });
+
+  test("converts image-like CommonMark to a link after the bang", () => {
+    expect(formatOutboundSlackText("see ![alt](https://example.com/i.png)")).toBe(
+      "see !<https://example.com/i.png|alt>",
+    );
+  });
+
+  test("leaves CommonMark link syntax in code and non-http targets alone", () => {
+    expect(formatOutboundSlackText("run `[x](https://example.com)`")).toBe(
+      "run `[x](https://example.com)`",
+    );
+    expect(formatOutboundSlackText("```\n[x](https://example.com)\n```")).toBe(
+      "```\n[x](https://example.com)\n```",
+    );
+    expect(formatOutboundSlackText("see [notes](./notes.md)")).toBe("see [notes](./notes.md)");
+  });
+
   test("escapes bare < > & in literal text", () => {
     expect(formatOutboundSlackText("a < b && c > d")).toBe("a &lt; b &amp;&amp; c &gt; d");
   });
@@ -52,6 +104,24 @@ describe("formatOutboundSlackText", () => {
 
   test("handles empty input", () => {
     expect(formatOutboundSlackText("")).toBe("");
+  });
+
+  test("leaves an existing Slack link with a CommonMark-looking label alone", () => {
+    expect(
+      formatOutboundSlackText("see <https://example.com|[label](https://other.example)>"),
+    ).toBe("see <https://example.com|[label](https://other.example)>");
+  });
+
+  test("restores a Slack token nested in a rewritten CommonMark label", () => {
+    expect(formatOutboundSlackText("[ping <@U12345678>](https://example.com)")).toBe(
+      "<https://example.com|ping <@U12345678>>",
+    );
+  });
+
+  test("leaves a CommonMark link whose URL holds a Slack token alone", () => {
+    expect(formatOutboundSlackText("[x](https://example.com/?q=<@U12345678>)")).toBe(
+      "[x](https://example.com/?q=<@U12345678>)",
+    );
   });
 
   test("real-world CI dump stays readable with mention + URL", () => {

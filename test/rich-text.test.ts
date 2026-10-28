@@ -34,6 +34,81 @@ describe("parseInlineElements", () => {
     ]);
   });
 
+  test("[label](url) CommonMark links are parsed as link elements", () => {
+    expect(parseInlineElements("See [PR #42](https://example.com/pull/42) *now*")).toEqual([
+      { type: "text", text: "See " },
+      { type: "link", url: "https://example.com/pull/42", text: "PR #42" },
+      { type: "text", text: " " },
+      { type: "text", text: "now", style: { bold: true } },
+    ]);
+  });
+
+  test("[label](url) with balanced parentheses in the URL keeps the full URL", () => {
+    expect(parseInlineElements("See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now")).toEqual([
+      { type: "text", text: "See " },
+      { type: "link", url: "https://en.wikipedia.org/wiki/Foo_(bar)", text: "Foo" },
+      { type: "text", text: " now" },
+    ]);
+  });
+
+  test("[label](url) stays literal inside code and for non-http targets", () => {
+    expect(parseInlineElements("`[x](https://example.com)` and [notes](./notes.md)")).toEqual([
+      { type: "text", text: "[x](https://example.com)", style: { code: true } },
+      { type: "text", text: " and [notes](./notes.md)" },
+    ]);
+  });
+
+  test("[label](url) with token-breaking URL characters stays literal", () => {
+    expect(parseInlineElements("see [x](https://ex.com/a>b)")).toEqual([
+      { type: "text", text: "see [x](https://ex.com/a>b)" },
+    ]);
+    expect(parseInlineElements("see [x](https://ex.com/a|b)")).toEqual([
+      { type: "text", text: "see [x](https://ex.com/a|b)" },
+    ]);
+    expect(parseInlineElements("see [x](https://ex.com/a<b)")).toEqual([
+      { type: "text", text: "see [x](https://ex.com/a<b)" },
+    ]);
+  });
+
+  test("a rejected [label](url) span keeps underscores literal", () => {
+    expect(parseInlineElements("see [x](https://ex.com/a_b|c_d)")).toEqual([
+      { type: "text", text: "see [x](https://ex.com/a_b|c_d)" },
+    ]);
+  });
+
+  test("a rejected span with parens, a pipe, and underscores stays literal", () => {
+    expect(parseInlineElements("[x](https://ex.com/foo(bar)|my_org/my_repo)")).toEqual([
+      { type: "text", text: "[x](https://ex.com/foo(bar)|my_org/my_repo)" },
+    ]);
+  });
+
+  test("a bare URL keeps underscores literal", () => {
+    expect(parseInlineElements("see https://github.com/my_org/my_repo")).toEqual([
+      { type: "text", text: "see https://github.com/my_org/my_repo" },
+    ]);
+  });
+
+  test("formatting next to a literal URL span still parses", () => {
+    expect(parseInlineElements("[x](https://ex.com/a>b) and *bold*")).toEqual([
+      { type: "text", text: "[x](https://ex.com/a>b) and " },
+      { type: "text", text: "bold", style: { bold: true } },
+    ]);
+  });
+
+  test("[label](url) keeps pipes in the label", () => {
+    expect(parseInlineElements("see [a|b](https://example.com)")).toEqual([
+      { type: "text", text: "see " },
+      { type: "link", url: "https://example.com", text: "a|b" },
+    ]);
+  });
+
+  test("![alt](url) parses as a literal bang plus a link", () => {
+    expect(parseInlineElements("see ![alt](https://example.com/i.png)")).toEqual([
+      { type: "text", text: "see !" },
+      { type: "link", url: "https://example.com/i.png", text: "alt" },
+    ]);
+  });
+
   test(":emoji: shortcode is parsed as an emoji element", () => {
     expect(parseInlineElements("Launch :rocket: now")).toEqual([
       { type: "text", text: "Launch " },
@@ -358,7 +433,7 @@ describe("textToRichTextBlocks", () => {
     ]);
   });
 
-  test("Slack manual links and CommonMark links remain distinct in list items", () => {
+  test("Slack manual links and CommonMark links both become link elements in list items", () => {
     const result = textToRichTextBlocks(
       "- Review <https://example.com/pull/42|PR #42>\n- Review [PR #43](https://example.com/pull/43)",
     )!;
@@ -370,7 +445,8 @@ describe("textToRichTextBlocks", () => {
       { type: "link", url: "https://example.com/pull/42", text: "PR #42" },
     ]);
     expect(list.elements[1]!.elements).toEqual([
-      { type: "text", text: "Review [PR #43](https://example.com/pull/43)" },
+      { type: "text", text: "Review " },
+      { type: "link", url: "https://example.com/pull/43", text: "PR #43" },
     ]);
   });
 
@@ -384,5 +460,39 @@ describe("textToRichTextBlocks", () => {
     const result = textToRichTextBlocks("- Item\n> quoted text")!;
     expect(result).not.toBeNull();
     expect(result[0]!.elements.find((e) => e.type === "rich_text_quote")).toBeDefined();
+  });
+
+  test("one-line fenced code keeps its content", () => {
+    const result = textToRichTextBlocks("```hello```", { includeInlineFormatting: true })!;
+    expect(result[0]!.elements).toEqual([
+      { type: "rich_text_preformatted", elements: [{ type: "text", text: "hello" }] },
+    ]);
+  });
+
+  test("one-line fenced code does not swallow the next line", () => {
+    const result = textToRichTextBlocks("```hello```\nnext line", {
+      includeInlineFormatting: true,
+    })!;
+    expect(result[0]!.elements).toEqual([
+      { type: "rich_text_preformatted", elements: [{ type: "text", text: "hello" }] },
+      { type: "rich_text_section", elements: [{ type: "text", text: "next line\n" }] },
+    ]);
+  });
+
+  test("text after a one-line fence stays inline text", () => {
+    const result = textToRichTextBlocks("```hello``` - tail", { includeInlineFormatting: true })!;
+    expect(result[0]!.elements).toEqual([
+      { type: "rich_text_preformatted", elements: [{ type: "text", text: "hello" }] },
+      { type: "rich_text_section", elements: [{ type: "text", text: "- tail\n" }] },
+    ]);
+  });
+
+  test("an existing Slack link with a CommonMark-looking label keeps its label", () => {
+    expect(parseInlineElements("see <https://example.com|[label](https://other.example)>")).toEqual(
+      [
+        { type: "text", text: "see " },
+        { type: "link", url: "https://example.com", text: "[label](https://other.example)" },
+      ],
+    );
   });
 });
