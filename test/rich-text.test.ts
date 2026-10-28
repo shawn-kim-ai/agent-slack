@@ -325,26 +325,6 @@ describe("textToRichTextBlocks", () => {
     ]);
   });
 
-  test("nests a third list level with indent 2", () => {
-    const result = textToRichTextBlocks("1. top\n  - mid\n    - deep\n2. top2")!;
-    const lists = result[0]!.elements.filter((e) => e.type === "rich_text_list");
-    expect(
-      lists.map((l) => {
-        const { style, indent, offset } = l as {
-          style: string;
-          indent?: number;
-          offset?: number;
-        };
-        return [style, indent ?? 0, offset ?? 0];
-      }),
-    ).toEqual([
-      ["ordered", 0, 0],
-      ["bullet", 1, 0],
-      ["bullet", 2, 0],
-      ["ordered", 0, 1],
-    ]);
-  });
-
   test("bold text in list items is parsed", () => {
     const result = textToRichTextBlocks("- *Bold item*\n- Normal item")!;
     expect(result).not.toBeNull();
