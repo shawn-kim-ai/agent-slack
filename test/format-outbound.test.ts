@@ -118,6 +118,12 @@ describe("formatOutboundSlackText", () => {
     );
   });
 
+  test("leaves a CommonMark link whose URL holds a Slack token alone", () => {
+    expect(formatOutboundSlackText("[x](https://example.com/?q=<@U12345678>)")).toBe(
+      "[x](https://example.com/?q=<@U12345678>)",
+    );
+  });
+
   test("real-world CI dump stays readable with mention + URL", () => {
     const input =
       '@U05BRPTKL6A heads up: CI "Install dependencies" is failing: https://github.com/x/y/actions/runs/1 & it needs <fix>';
