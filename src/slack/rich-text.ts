@@ -45,12 +45,14 @@ const BLOCKQUOTE_RE = /^> (.*)$/;
  * Parse mrkdwn inline formatting into Slack rich_text inline elements.
  *
  * Handles: *bold*, _italic_, ~strike~, `code`, :emoji:, <url|label>, <url>,
- * and CommonMark [label](url) links
+ * and CommonMark [label](url) links. A rejected [label](url) span or a bare
+ * URL stays literal text, so emphasis never parses inside it.
  */
 const INLINE_PATTERN = new RegExp(
   [
     "`([^`]+)`",
     COMMONMARK_LINK_SOURCE,
+    "(\\[[^\\]\\n]+\\]\\((?:https?:\\/\\/|mailto:)[^)\\s]*\\)|(?:https?:\\/\\/|mailto:)[^\\s<>]+)",
     "(?:^|(?<=[^A-Za-z0-9_])):([a-zA-Z0-9_+-]+):(?![A-Za-z0-9_+-])",
     "\\*([^*]+)\\*",
     "_([^_]+)_",
@@ -80,15 +82,12 @@ export function parseInlineElements(text: string): InlineElement[] {
   };
 
   while ((match = re.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      pushText(text.slice(lastIndex, match.index));
-    }
-
     const [
       ,
       code,
       mdLinkText,
       mdLinkUrl,
+      literalSpan,
       emojiName,
       bold,
       italic,
@@ -103,6 +102,12 @@ export function parseInlineElements(text: string): InlineElement[] {
       bareUserId,
       bareBroadcast,
     ] = match;
+    if (literalSpan != null) {
+      continue;
+    }
+    if (match.index > lastIndex) {
+      pushText(text.slice(lastIndex, match.index));
+    }
     if (code != null) {
       elements.push({ type: "text", text: code, style: { code: true } });
     } else if (mdLinkText != null && mdLinkUrl != null) {

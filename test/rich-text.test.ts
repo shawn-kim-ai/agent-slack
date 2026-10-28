@@ -70,6 +70,25 @@ describe("parseInlineElements", () => {
     ]);
   });
 
+  test("a rejected [label](url) span keeps underscores literal", () => {
+    expect(parseInlineElements("see [x](https://ex.com/a_b|c_d)")).toEqual([
+      { type: "text", text: "see [x](https://ex.com/a_b|c_d)" },
+    ]);
+  });
+
+  test("a bare URL keeps underscores literal", () => {
+    expect(parseInlineElements("see https://github.com/my_org/my_repo")).toEqual([
+      { type: "text", text: "see https://github.com/my_org/my_repo" },
+    ]);
+  });
+
+  test("formatting next to a literal URL span still parses", () => {
+    expect(parseInlineElements("[x](https://ex.com/a>b) and *bold*")).toEqual([
+      { type: "text", text: "[x](https://ex.com/a>b) and " },
+      { type: "text", text: "bold", style: { bold: true } },
+    ]);
+  });
+
   test("[label](url) keeps pipes in the label", () => {
     expect(parseInlineElements("see [a|b](https://example.com)")).toEqual([
       { type: "text", text: "see " },
