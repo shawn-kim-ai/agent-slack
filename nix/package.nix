@@ -29,6 +29,9 @@ in
     };
 
     dontUnpack = true;
+    # Bun embeds its payload in the binary, which strip and patchelf can damage.
+    dontStrip = true;
+    dontPatchELF = true;
 
     installPhase = ''
       runHook preInstall
