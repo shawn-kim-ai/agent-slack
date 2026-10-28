@@ -65,6 +65,8 @@ Pushing the tag triggers the GitHub Actions `Release` workflow, which:
 - Generates checksums
 - Uploads everything to the GitHub Release
 
+`nix run github:stablyai/agent-slack` reads version and hashes from `nix/sources.json`. After publishing a GitHub Release, refresh that file with `./scripts/update-nix-sources.sh`.
+
 ### Manual release (alternative)
 
 ```bash

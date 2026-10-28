@@ -19,14 +19,39 @@ export function extractMrkdwnFromRichTextBlock(block: unknown): string {
     return "";
   }
   const elements = Array.isArray(block.elements) ? block.elements : [];
-  const out: string[] = [];
+  const out: { isList: boolean; isTopLevelRestart: boolean; text: string }[] = [];
   for (const el of elements) {
     const txt = extractMrkdwnFromRichTextElement(el);
     if (txt.trim()) {
-      out.push(txt);
+      out.push({
+        isList: isRecord(el) && el.type === "rich_text_list",
+        isTopLevelRestart: isTopLevelOrderedRestart(el),
+        text: txt,
+      });
     }
   }
-  return out.join("\n\n");
+  return out
+    .map(({ text, isTopLevelRestart }, index) => {
+      if (index === 0) {
+        return text;
+      }
+      const previous = out[index - 1]!;
+      const joinLists = previous.isList && out[index]!.isList && !isTopLevelRestart;
+      return `${joinLists ? "\n" : "\n\n"}${text}`;
+    })
+    .join("");
+}
+
+function isTopLevelOrderedRestart(el: unknown): boolean {
+  if (!isRecord(el) || el.type !== "rich_text_list" || el.style !== "ordered") {
+    return false;
+  }
+  const indent =
+    typeof el.indent === "number" && Number.isInteger(el.indent) ? Math.max(0, el.indent) : 0;
+  if (indent !== 0) {
+    return false;
+  }
+  return !(typeof el.offset === "number" && Number.isFinite(el.offset) && el.offset > 0);
 }
 
 function extractMrkdwnFromRichTextElement(el: unknown): string {
@@ -71,7 +96,10 @@ function extractMrkdwnFromRichTextElement(el: unknown): string {
     const style = typeof el.style === "string" ? el.style : "bullet";
     const items: string[] = [];
     const itemEls = Array.isArray(el.elements) ? el.elements : [];
-    let num = 0;
+    const indent =
+      typeof el.indent === "number" && Number.isInteger(el.indent) ? Math.max(0, el.indent) : 0;
+    const indentation = "  ".repeat(indent);
+    let num = typeof el.offset === "number" && Number.isFinite(el.offset) ? el.offset : 0;
     for (const item of itemEls) {
       const txt = extractMrkdwnFromRichTextElement(item).trim();
       if (!txt) {
@@ -79,7 +107,7 @@ function extractMrkdwnFromRichTextElement(el: unknown): string {
       }
       num++;
       const prefix = style === "ordered" ? `${num}. ` : "- ";
-      items.push(`${prefix}${txt}`);
+      items.push(`${indentation}${prefix}${txt}`);
     }
     return items.join("\n");
   }

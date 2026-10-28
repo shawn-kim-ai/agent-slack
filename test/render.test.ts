@@ -16,6 +16,42 @@ describe("renderSlackMessageContent", () => {
     expect(rendered).toBe("*Hi*\n[View](https://example.com)");
   });
 
+  test("includes header block text", () => {
+    const msg = {
+      text: "Deploy failed",
+      blocks: [
+        {
+          type: "header",
+          text: { type: "plain_text", text: "Deploy failed: api-server" },
+        },
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "Step *migrate* exited with code 1" },
+        },
+      ],
+    };
+    expect(renderSlackMessageContent(msg)).toBe(
+      "Deploy failed: api-server\n\nStep *migrate* exited with code 1",
+    );
+  });
+
+  test("uses text fallback when headers are the only rendered blocks", () => {
+    const header = { type: "header", text: { type: "plain_text", text: "Release review" } };
+    const blocks = [header, { type: "video" }];
+
+    expect(renderSlackMessageContent({ text: "Deploy failed", blocks })).toBe(
+      "Release review\n\nDeploy failed",
+    );
+    expect(renderSlackMessageContent({ text: "Release review", blocks })).toBe("Release review");
+    expect(
+      renderSlackMessageContent({
+        text: "Fallback",
+        blocks,
+        attachments: [{ text: "Attachment details" }],
+      }),
+    ).toBe("Release review\n\nAttachment details");
+  });
+
   test("preserves usergroup and broadcast elements from rich text", () => {
     const msg = {
       blocks: [

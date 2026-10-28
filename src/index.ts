@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { getPackageVersion } from "./lib/version.ts";
+import { shouldStartCommandWatchdog } from "./cli/command-watchdog.ts";
 import { createCliContext } from "./cli/context.ts";
 import { registerAuthCommand } from "./cli/auth-command.ts";
 import { registerCanvasCommand } from "./cli/canvas-command.ts";
@@ -28,17 +29,6 @@ function getCommandTimeoutMs(): number {
   return Math.floor(parsed);
 }
 
-function shouldStartCommandWatchdog(args: string[]): boolean {
-  const [command, subcommand] = args;
-  if (!command || command === "update") {
-    return false;
-  }
-  if (command === "message" && subcommand === "draft") {
-    return false;
-  }
-  return true;
-}
-
 function startCommandWatchdog(args: string[]): void {
   if (!shouldStartCommandWatchdog(args)) {
     return;
@@ -59,7 +49,7 @@ program
   .version(getPackageVersion())
   .option(
     "--safe-mode",
-    'Human-in-the-loop enforcement: redirect "message send" to the draft editor and block "message edit"/"message delete" (also: AGENT_SLACK_SAFE_MODE=1)',
+    'Human-in-the-loop enforcement: redirect "message send" to the draft editor, block the CI "message compose" direct-send shortcut, and block "message edit"/"message delete" (also: AGENT_SLACK_SAFE_MODE=1)',
   );
 
 startCommandWatchdog(process.argv.slice(2));

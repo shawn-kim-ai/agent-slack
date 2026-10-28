@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { execFile } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 // @ts-ignore — import attributes need module:"esnext" in tsconfig; Bun handles this fine
 import _editorHtmlContent from "./draft-editor.html" with { type: "text" };
 
@@ -14,19 +15,61 @@ export type DraftEditorConfig = {
 
 export type DraftResult = { sent: true; text: string } | { cancelled: true };
 
-export function openDraftEditor(config: DraftEditorConfig): Promise<DraftResult> {
+export function openDraftEditor(
+  config: DraftEditorConfig,
+  open: (url: string) => void = openBrowser,
+): Promise<DraftResult> {
   return new Promise<DraftResult>((resolve, reject) => {
     let settled = false;
 
+    const sessionToken = randomBytes(32).toString("base64url");
+    const tokenMatches = (candidate: string | string[] | null | undefined): boolean => {
+      if (typeof candidate !== "string") {
+        return false;
+      }
+      const a = Buffer.from(candidate);
+      const b = Buffer.from(sessionToken);
+      return a.length === b.length && timingSafeEqual(a, b);
+    };
     const server: Server = createServer(async (req, res) => {
-      if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
-        const html = buildEditorHtml(config);
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      let requestUrl: URL;
+      try {
+        requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+      } catch {
+        res.writeHead(400);
+        res.end("Bad request");
+        return;
+      }
+
+      if (
+        req.method === "GET" &&
+        (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html")
+      ) {
+        if (!tokenMatches(requestUrl.searchParams.get("t"))) {
+          res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Forbidden");
+          return;
+        }
+        const html = buildEditorHtml(config, sessionToken);
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Referrer-Policy": "no-referrer",
+        });
         res.end(html);
         return;
       }
 
-      if (req.method === "POST" && req.url === "/send") {
+      if (
+        req.method === "POST" &&
+        (requestUrl.pathname === "/send" || requestUrl.pathname === "/cancel") &&
+        !tokenMatches(req.headers["x-draft-token"])
+      ) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: "forbidden" }));
+        return;
+      }
+
+      if (req.method === "POST" && requestUrl.pathname === "/send") {
         try {
           const body = await readBody(req);
           const data = JSON.parse(body) as { text: string };
@@ -52,7 +95,7 @@ export function openDraftEditor(config: DraftEditorConfig): Promise<DraftResult>
         return;
       }
 
-      if (req.method === "POST" && req.url === "/cancel") {
+      if (req.method === "POST" && requestUrl.pathname === "/cancel") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
         settled = true;
@@ -91,9 +134,9 @@ export function openDraftEditor(config: DraftEditorConfig): Promise<DraftResult>
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : 0;
-      const url = `http://127.0.0.1:${port}`;
+      const url = `http://127.0.0.1:${port}/?t=${sessionToken}`;
       process.stderr.write(`Draft editor: ${url}\n`);
-      openBrowser(url);
+      open(url);
     });
   });
 }
@@ -148,10 +191,11 @@ function extractWorkspaceName(url?: string): string | null {
   }
 }
 
-function buildEditorHtml(config: DraftEditorConfig): string {
+function buildEditorHtml(config: DraftEditorConfig, sessionToken: string): string {
   const threadUrl = buildSlackThreadUrl(config);
   const workspaceName = extractWorkspaceName(config.workspaceUrl);
   const injectedConfig = JSON.stringify({
+    sessionToken,
     channelName: config.channelName,
     channelId: config.channelId || null,
     workspaceUrl: config.workspaceUrl || null,

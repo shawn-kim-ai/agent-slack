@@ -4,46 +4,42 @@ import { createDecipheriv, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "../lib/object-type-guards.ts";
-import { getKeychainTimeoutMs } from "./keychain.ts";
+import {
+  getKeychainTimeoutMs,
+  KeychainAccessError,
+  macKeychainPasswords,
+  type KeychainOptions,
+  type KeychainQuery,
+} from "./keychain.ts";
 
 const IS_MACOS = process.platform === "darwin";
 const IS_LINUX = process.platform === "linux";
 
-export function getSafeStoragePasswords(prefix: string): string[] {
+export function* getSafeStoragePasswords(
+  prefix: string,
+  options: KeychainOptions = {},
+): Generator<string, void, undefined> {
   if (IS_MACOS) {
     // Electron ("Slack Key") and Mac App Store ("Slack App Store Key") builds
     // store separate Safe Storage passwords under the same service name.
     // Query each known account explicitly, then fall back to service-only
     // lookups to catch unknown account names.
-    const keychainQueries: { service: string; account?: string }[] = [
+    const keychainQueries: KeychainQuery[] = [
       { service: "Slack Safe Storage", account: "Slack Key" },
       { service: "Slack Safe Storage", account: "Slack App Store Key" },
       { service: "Slack Safe Storage" },
       { service: "Chrome Safe Storage" },
       { service: "Chromium Safe Storage" },
     ];
-    const passwords: string[] = [];
-    for (const q of keychainQueries) {
-      try {
-        const args = ["-w", "-s", q.service];
-        if (q.account) {
-          args.push("-a", q.account);
-        }
-        const out = execFileSync("security", ["find-generic-password", ...args], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: getKeychainTimeoutMs(),
-        }).trim();
-        if (out) {
-          passwords.push(out);
-        }
-      } catch {
-        // continue
-      }
+    try {
+      yield* macKeychainPasswords(keychainQueries, options);
+    } catch (err: unknown) {
+      const message = `Could not read Safe Storage password from desktop keychain. ${err instanceof Error ? err.message : String(err)}`;
+      throw err instanceof KeychainAccessError
+        ? new KeychainAccessError(message)
+        : new Error(message);
     }
-    if (passwords.length > 0) {
-      return [...new Set(passwords)];
-    }
+    return;
   }
 
   if (IS_LINUX) {
@@ -75,7 +71,8 @@ export function getSafeStoragePasswords(prefix: string): string[] {
     }
     passwords.push("peanuts");
 
-    return [...new Set(passwords)];
+    yield* new Set(passwords);
+    return;
   }
 
   throw new Error("Could not read Safe Storage password from desktop keychain.");

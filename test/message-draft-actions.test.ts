@@ -11,6 +11,7 @@ import {
   updateDraftAction,
 } from "../src/cli/message-draft-actions.ts";
 import { registerMessageDraftCommand } from "../src/cli/message-draft-command.ts";
+import { errorMessage } from "../src/cli/context.ts";
 
 type Call = { method: string; params: Record<string, unknown> };
 
@@ -28,6 +29,10 @@ function createContext(
     failOnce?: "drafts.create" | "drafts.update";
     /** Every call to this method returns ok:false with the given error. */
     failWith?: { method: "drafts.create" | "drafts.update"; error: string };
+    /** Every call to drafts.create throws the given bare error (browser transport). */
+    throwWith?: { method: "drafts.create"; error: string };
+    /** Every drafts.list call throws (lookup-failure path). */
+    listThrows?: string;
     /** Simulate withAutoRefresh retrying work once on an invalid_auth error. */
     retryOnAuth?: boolean;
   } = {},
@@ -38,6 +43,9 @@ function createContext(
       calls.push({ method, params });
       switch (method) {
         case "drafts.list":
+          if (fixtures.listThrows) {
+            throw new Error(fixtures.listThrows);
+          }
           return { ok: true, drafts: fixtures.draftsList ?? [] };
         case "drafts.create":
         case "drafts.update": {
@@ -46,6 +54,10 @@ function createContext(
           if (fixtures.failOnce === method && !failedOnce.current) {
             failedOnce.current = true;
             return { ok: false, error: "invalid_auth" };
+          }
+          // Simulate the browser transport throwing the bare Slack error.
+          if (fixtures.throwWith?.method === method) {
+            throw new Error(fixtures.throwWith.error);
           }
           // Simulate a persistent failure (e.g. stale conflict) on every call.
           if (fixtures.failWith?.method === method) {
@@ -297,6 +309,184 @@ describe("createDraftAction", () => {
     ).rejects.toThrow();
     expect(calls.some((c) => c.method === "drafts.create")).toBe(false);
     expect(calls.some((c) => c.method === "files.getUploadURLExternal")).toBe(false);
+  });
+});
+
+describe("createDraftAction: attached_draft_exists", () => {
+  const threadTs = "1700000000.100000";
+
+  function threadDraft(id: string, extra: Record<string, unknown> = {}) {
+    return {
+      id,
+      blocks: [],
+      destinations: [{ channel_id: "C11111111", thread_ts: threadTs }],
+      last_updated_ts: "1700000000.5",
+      ...extra,
+    };
+  }
+
+  async function createError(input: {
+    calls: Call[];
+    fixtures: Parameters<typeof createContext>[1];
+    options?: { threadTs?: string };
+  }): Promise<string> {
+    const ctx = createContext(input.calls, input.fixtures);
+    try {
+      await createDraftAction({
+        ctx,
+        targetInput: "C11111111",
+        text: "hello again",
+        options: {
+          workspace: "https://workspace.slack.com",
+          threadTs,
+          ...input.options,
+        },
+      });
+    } catch (err) {
+      // Mirror what the CLI prints: the command layer renders errorMessage(err).
+      return errorMessage(err);
+    }
+    throw new Error("expected createDraftAction to throw");
+  }
+
+  test("names the conflicting thread draft and the update command", async () => {
+    const calls: Call[] = [];
+    const output = await createError({
+      calls,
+      fixtures: {
+        failWith: { method: "drafts.create", error: "attached_draft_exists" },
+        draftsList: [
+          // A sent draft on the same destination must not be named.
+          threadDraft("DrSent", { is_sent: true }),
+          // A draft on another channel must not be named.
+          {
+            id: "DrOther",
+            blocks: [],
+            destinations: [{ channel_id: "C22222222" }],
+            last_updated_ts: "1700000000.5",
+          },
+          threadDraft("DrExist"),
+        ],
+      },
+    });
+
+    expect(output).toContain("already attached to this thread");
+    expect(output).toContain("DrExist");
+    expect(output).not.toContain("DrSent");
+    expect(output).toContain("agent-slack message draft update DrExist <text>");
+    expect(output).toContain("delete");
+    expect(output).toBe(
+      'A draft (DrExist) is already attached to this thread. Run "agent-slack message draft update DrExist <text>" to edit it, or delete it first: Slack drafts.create failed: attached_draft_exists',
+    );
+    // Cheap lookup: one active-only drafts.list call.
+    const lists = calls.filter((c) => c.method === "drafts.list");
+    expect(lists).toHaveLength(1);
+    expect(lists[0]?.params.is_active).toBe(true);
+  });
+
+  test("names the channel (not the thread) for a channel draft conflict", async () => {
+    const calls: Call[] = [];
+    const output = await createError({
+      calls,
+      options: { threadTs: undefined },
+      fixtures: {
+        failWith: { method: "drafts.create", error: "attached_draft_exists" },
+        draftsList: [
+          {
+            id: "DrChannel",
+            blocks: [],
+            destinations: [{ channel_id: "C11111111" }],
+            last_updated_ts: "1700000000.5",
+          },
+        ],
+      },
+    });
+
+    expect(output).toContain("already attached to this channel");
+    expect(output).toContain("DrChannel");
+    expect(output).toContain("agent-slack message draft update DrChannel <text>");
+  });
+
+  test("translates the bare browser-transport error too", async () => {
+    const calls: Call[] = [];
+    const output = await createError({
+      calls,
+      fixtures: {
+        throwWith: { method: "drafts.create", error: "attached_draft_exists" },
+        draftsList: [threadDraft("DrExist")],
+      },
+    });
+
+    expect(output).toContain("already attached to this thread");
+    expect(output).toContain("DrExist");
+  });
+
+  test("still guides the user when no matching draft is found", async () => {
+    const calls: Call[] = [];
+    const output = await createError({
+      calls,
+      fixtures: {
+        failWith: { method: "drafts.create", error: "attached_draft_exists" },
+        draftsList: [],
+      },
+    });
+
+    expect(output).toContain("already attached to this thread");
+    expect(output).toContain("agent-slack message draft list");
+    expect(output).toContain("agent-slack message draft update <draft-id> <text>");
+    expect(output).toContain("delete");
+    expect(output).not.toContain(".:");
+  });
+
+  test("still guides the user when the lookup itself fails", async () => {
+    const calls: Call[] = [];
+    const output = await createError({
+      calls,
+      fixtures: {
+        failWith: { method: "drafts.create", error: "attached_draft_exists" },
+        listThrows: "boom",
+      },
+    });
+
+    expect(output).toContain("already attached to this thread");
+    expect(output).toContain("agent-slack message draft update <draft-id> <text>");
+  });
+
+  test("cleans up uploaded attachments on an attached-draft failure", async () => {
+    const calls: Call[] = [];
+    const ctx = createContext(calls, {
+      failWith: { method: "drafts.create", error: "attached_draft_exists" },
+      draftsList: [threadDraft("DrExist")],
+    });
+    const dir = await mkdtemp(join(tmpdir(), "agent-slack-draft-attached-cleanup-"));
+    const a = join(dir, "a.png");
+    await writeFile(a, "x");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(
+      async () => new Response("", { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        createDraftAction({
+          ctx,
+          targetInput: "C11111111",
+          text: "see attached",
+          options: {
+            workspace: "https://workspace.slack.com",
+            threadTs,
+            attach: [a],
+          },
+        }),
+      ).rejects.toThrow(/already attached to this thread/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    const deletes = calls.filter((c) => c.method === "files.delete");
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]?.params.file).toBe("F-a.png");
   });
 });
 

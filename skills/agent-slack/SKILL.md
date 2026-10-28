@@ -21,7 +21,7 @@ If a capability named here is absent from installed help, report version skew in
 - Read and search freely.
 - Perform write actions only when explicitly requested: sends, edits, deletes, reactions, invitations, channel or canvas creation/editing, mark-read operations, scheduling or canceling delivery, uploads, Later state/reminder changes, DM/group-DM creation, and `workflow run`. Workflow runs can execute downstream actions.
 - For compose- or review-only requests, return proposed text without invoking Slack, or use `message draft create` to add a Slack-native draft the user can review and send (nothing is posted). `message compose` is send-capable; use it only when the user explicitly asks to open the interactive editor. In CI or another noninteractive environment, do not invoke it without separate authorization to send immediately: CI skips the editor and sends supplied text.
-- With `AGENT_SLACK_SAFE_MODE=1` (or the global `--safe-mode` flag) set, safe mode is enforced at the tool level: `message send` is redirected to the draft editor and `message edit`/`message delete` are blocked. Use it when nothing should post without human review.
+- With `AGENT_SLACK_SAFE_MODE=1` (or the global `--safe-mode` flag) set, safe mode is enforced at the tool level: `message send` is redirected to the draft editor, the CI `message compose` direct-send shortcut is blocked, and `message edit`/`message delete` are blocked. Use it when nothing should post without human review.
 
 ## Workflow
 
@@ -39,7 +39,7 @@ Use `--no-unfurl` with `message send` or `message compose` when the user wants S
 
 Ordinary `message send` and `message edit` calls auto-convert lists. `message send --blocks` and `message edit --blocks` use supplied Block Kit blocks, while `message send --attach` sends its initial comment without automatic list conversion. Both Slack's `<URL|label>` syntax and CommonMark `[label](URL)` links become real link elements, in lists and elsewhere; CommonMark syntax inside a code span or fenced code block is left literal.
 
-Slack-native drafts (`message draft list|create|update|delete`) manage drafts that appear in the user's Slack client; `create` posts nothing. `create` and `update` accept repeatable `--attach <path>`; on `update` the files are added to the draft's existing attachments rather than replacing them. They use undocumented session endpoints and require browser-style auth (xoxc/xoxd).
+Slack-native drafts (`message draft list|create|update|delete`) manage drafts that appear in the user's Slack client; `create` posts nothing. `create` and `update` accept repeatable `--attach <path>`; on `update` the files are added to the draft's existing attachments rather than replacing them. They use undocumented session endpoints and require browser-style auth (xoxc/xoxd). Slack attaches each draft to one channel or thread composer, so a second `create` for the same destination fails. Update or delete the existing draft instead.
 
 `canvas edit` uses Slack's public `canvases.edit` API and applies exactly one operation per call. The
 default `replace` operation replaces the whole canvas; section-targeted inserts/replacements and

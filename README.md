@@ -147,6 +147,11 @@ export SLACK_COOKIE_D="xoxd-..."   # cookie d
 agent-slack auth test
 ```
 
+Browser API calls send credentials only to the canonical HTTPS workspace origin under
+`slack.com`. Other hosts, non-default ports, and non-HTTPS origins are rejected before tokens
+or cookies are sent, and redirects are refused. File downloads send the browser token and cookie
+to the Slack-provided file URL and are not covered.
+
 Or use a standard Slack token (xoxb/xoxp):
 
 ```bash
@@ -259,6 +264,8 @@ agent-slack message draft create "#general" "Latest numbers" --attach ./q3.png -
 agent-slack message draft update "DR_ID" "Latest numbers" --attach ./appendix.pdf
 ```
 
+Slack attaches each draft to one channel or thread composer. If `create` fails because a draft is already attached, update that draft or delete it first.
+
 ### Safe mode (enforced human-in-the-loop)
 
 Skill instructions like "always use `draft`, never `send`" are guidance an agent can ignore. Safe mode enforces it at the tool level — useful when an AI agent has access to `agent-slack` and you want a guarantee that nothing posts without human review.
@@ -274,6 +281,7 @@ agent-slack --safe-mode message send "#general" "hello"
 While safe mode is active:
 
 - `message send` → redirected to the draft editor with the text pre-filled; you review and send from the browser. The output includes `"safe_mode": true` and `"redirected_from": "send"`, and a warning is printed to stderr. Flags the editor cannot represent (`--attach`, `--blocks`, `--schedule`, `--schedule-in`, `--reply-broadcast`) are rejected with an error instead of being silently dropped.
+- `message compose` → opens the browser editor normally. In CI, where compose would skip the editor and send directly, it is blocked with an error.
 - `message edit` and `message delete` → blocked with an error.
 - All read operations (`get`, `list`, `search`, etc.) and reactions are unchanged.
 

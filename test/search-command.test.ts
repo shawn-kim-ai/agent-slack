@@ -49,6 +49,7 @@ function createClient(calls: ApiCall[]) {
 
       if (method === "conversations.history") {
         return {
+          response_metadata: { next_cursor: "" },
           messages: [
             {
               ts: "1.000001",
@@ -152,6 +153,422 @@ describe("search referenced users", () => {
       U22222222: { id: "U22222222", name: "bob", display_name: "Bob" },
     });
     expect(result.referenced_users).not.toHaveProperty("U44444444");
+  });
+
+  test("searchSlack scans older channel history pages using Slack cursors", async () => {
+    const calls: ApiCall[] = [];
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor === undefined) {
+          return {
+            response_metadata: { next_cursor: "page-2" },
+            messages: [{ ts: "2.000002", text: "not a match", user: "U11111111" }],
+          };
+        }
+        if (params.cursor === "page-2") {
+          return {
+            response_metadata: { next_cursor: "" },
+            messages: [{ ts: "1.000001", text: "needle", user: "U22222222" }],
+          };
+        }
+        throw new Error(`Unexpected cursor: ${String(params.cursor)}`);
+      },
+    };
+
+    const result = await searchSlack({
+      client: client as never,
+      auth: { auth_type: "standard", token: "x" },
+      options: {
+        workspace_url: "https://workspace.slack.com",
+        query: "needle",
+        kind: "messages",
+        channels: ["C12345678"],
+        limit: 20,
+        max_content_chars: 4000,
+        content_type: "any",
+        download: false,
+      },
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages?.[0]?.content).toBe("needle");
+    expect(
+      calls
+        .filter((call) => call.method === "conversations.history")
+        .map((call) => call.params.cursor),
+    ).toEqual([undefined, "page-2"]);
+  });
+
+  test("searchSlack follows a valid cursor from an empty history page", async () => {
+    const calls: ApiCall[] = [];
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor === undefined) {
+          return {
+            response_metadata: { next_cursor: "page-2" },
+            messages: [],
+          };
+        }
+        if (params.cursor === "page-2") {
+          return {
+            response_metadata: { next_cursor: "" },
+            messages: [{ ts: "1.000001", text: "needle", user: "U22222222" }],
+          };
+        }
+        throw new Error(`Unexpected cursor: ${String(params.cursor)}`);
+      },
+    };
+
+    const result = await searchSlack({
+      client: client as never,
+      auth: { auth_type: "standard", token: "x" },
+      options: {
+        workspace_url: "https://workspace.slack.com",
+        query: "needle",
+        kind: "messages",
+        channels: ["C12345678"],
+        limit: 20,
+        max_content_chars: 4000,
+        content_type: "any",
+        download: false,
+      },
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages?.[0]?.content).toBe("needle");
+    expect(
+      calls
+        .filter((call) => call.method === "conversations.history")
+        .map((call) => call.params.cursor),
+    ).toEqual([undefined, "page-2"]);
+  });
+
+  test("searchSlack stops when a pagination cursor cycles", async () => {
+    const calls: ApiCall[] = [];
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (calls.filter((call) => call.method === "conversations.history").length > 3) {
+          throw new Error("Repeated pagination cursor was requested");
+        }
+        if (params.cursor === undefined) {
+          return { response_metadata: { next_cursor: "page-2" }, messages: [] };
+        }
+        if (params.cursor === "page-2") {
+          return { response_metadata: { next_cursor: "page-3" }, messages: [] };
+        }
+        if (params.cursor === "page-3") {
+          return { response_metadata: { next_cursor: "page-2" }, messages: [] };
+        }
+        throw new Error(`Unexpected cursor: ${String(params.cursor)}`);
+      },
+    };
+
+    const result = await searchSlack({
+      client: client as never,
+      auth: { auth_type: "standard", token: "x" },
+      options: {
+        workspace_url: "https://workspace.slack.com",
+        query: "needle",
+        kind: "messages",
+        channels: ["C12345678"],
+        limit: 20,
+        max_content_chars: 4000,
+        content_type: "any",
+        download: false,
+      },
+    });
+
+    expect(result.messages).toHaveLength(0);
+    expect(
+      calls
+        .filter((call) => call.method === "conversations.history")
+        .map((call) => call.params.cursor),
+    ).toEqual([undefined, "page-2", "page-3"]);
+  });
+
+  test("searchSlack stops paging at the after-date boundary", async () => {
+    const calls: ApiCall[] = [];
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method === "conversations.info") {
+          return { channel: { id: String(params.channel), name: "general" } };
+        }
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor !== undefined) {
+          throw new Error("history page past the after boundary must not be requested");
+        }
+        return {
+          response_metadata: { next_cursor: "page-2" },
+          messages: [
+            { ts: "1700086400.000001", text: "needle fresh", user: "U11111111" },
+            { ts: "1699900000.000001", text: "needle stale", user: "U11111111" },
+          ],
+        };
+      },
+    };
+
+    const result = await searchSlack({
+      client: client as never,
+      auth: { auth_type: "standard", token: "x" },
+      options: {
+        workspace_url: "https://workspace.slack.com",
+        query: "needle",
+        kind: "messages",
+        channels: ["C12345678"],
+        after: "2023-11-15",
+        limit: 20,
+        max_content_chars: 4000,
+        content_type: "any",
+        download: false,
+      },
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages?.[0]?.content).toBe("needle fresh");
+    expect(calls.filter((call) => call.method === "conversations.history")).toHaveLength(1);
+  });
+
+  test("searchSlack keeps first-page matches with a warning when a later page is rate limited", async () => {
+    const calls: ApiCall[] = [];
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor === undefined) {
+          return {
+            response_metadata: { next_cursor: "page-2" },
+            messages: [{ ts: "2.000002", text: "needle first page", user: "U11111111" }],
+          };
+        }
+        throw new Error(
+          "Slack API call conversations.history was rate limited; retry-after 60s exceeds AGENT_SLACK_RATE_LIMIT_MAX_WAIT_MS=0.",
+        );
+      },
+    };
+
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = ((...args: unknown[]) => {
+      warns.push(args.map(String).join(" "));
+    }) as typeof console.warn;
+    try {
+      const result = await searchSlack({
+        client: client as never,
+        auth: { auth_type: "standard", token: "x" },
+        options: {
+          workspace_url: "https://workspace.slack.com",
+          query: "needle",
+          kind: "messages",
+          channels: ["C12345678"],
+          limit: 20,
+          max_content_chars: 4000,
+          content_type: "any",
+          download: false,
+        },
+      });
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages?.[0]?.content).toBe("needle first page");
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warns.join("\n")).toContain("may be incomplete");
+  });
+
+  test("searchSlack treats a WebClient rate-limit code as partial results on a later page", async () => {
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor === undefined) {
+          return {
+            response_metadata: { next_cursor: "page-2" },
+            messages: [{ ts: "2.000002", text: "needle first page", user: "U11111111" }],
+          };
+        }
+        const rateLimited = new Error(
+          "A rate-limit has been reached, you may retry this request in 60 seconds",
+        ) as Error & { code: string; retryAfter: number };
+        rateLimited.code = "slack_webapi_rate_limited_error";
+        rateLimited.retryAfter = 60;
+        throw rateLimited;
+      },
+    };
+
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = ((...args: unknown[]) => {
+      warns.push(args.map(String).join(" "));
+    }) as typeof console.warn;
+    try {
+      const result = await searchSlack({
+        client: client as never,
+        auth: { auth_type: "standard", token: "x" },
+        options: {
+          workspace_url: "https://workspace.slack.com",
+          query: "needle",
+          kind: "messages",
+          channels: ["C12345678"],
+          limit: 20,
+          max_content_chars: 4000,
+          content_type: "any",
+          download: false,
+        },
+      });
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages?.[0]?.content).toBe("needle first page");
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warns.join("\n")).toContain("may be incomplete");
+  });
+
+  test("searchSlack keeps partial results when retries exhaust into an HTTP 429", async () => {
+    const client = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor === undefined) {
+          return {
+            response_metadata: { next_cursor: "page-2" },
+            messages: [{ ts: "2.000002", text: "needle first page", user: "U11111111" }],
+          };
+        }
+        throw new Error("Slack HTTP 429 calling conversations.history");
+      },
+    };
+
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = ((...args: unknown[]) => {
+      warns.push(args.map(String).join(" "));
+    }) as typeof console.warn;
+    try {
+      const result = await searchSlack({
+        client: client as never,
+        auth: { auth_type: "standard", token: "x" },
+        options: {
+          workspace_url: "https://workspace.slack.com",
+          query: "needle",
+          kind: "messages",
+          channels: ["C12345678"],
+          limit: 20,
+          max_content_chars: 4000,
+          content_type: "any",
+          download: false,
+        },
+      });
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages?.[0]?.content).toBe("needle first page");
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warns.join("\n")).toContain("may be incomplete");
+  });
+
+  test("searchSlack still throws on a first-page rate limit or a later non-rate-limit failure", async () => {
+    const firstPageLimited = {
+      api: async (method: string) => {
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        throw new Error(
+          "Slack API call conversations.history was rate limited; retry-after 60s exceeds AGENT_SLACK_RATE_LIMIT_MAX_WAIT_MS=0.",
+        );
+      },
+    };
+    await expect(
+      searchSlack({
+        client: firstPageLimited as never,
+        auth: { auth_type: "standard", token: "x" },
+        options: {
+          workspace_url: "https://workspace.slack.com",
+          query: "needle",
+          kind: "messages",
+          channels: ["C12345678"],
+          limit: 20,
+          max_content_chars: 4000,
+          content_type: "any",
+          download: false,
+        },
+      }),
+    ).rejects.toThrow("was rate limited");
+
+    const laterPageBroken = {
+      api: async (method: string, params: Record<string, unknown>) => {
+        if (method !== "conversations.history") {
+          throw new Error(`Unexpected API method: ${method}`);
+        }
+        if (params.cursor === undefined) {
+          return {
+            response_metadata: { next_cursor: "page-2" },
+            messages: [{ ts: "2.000002", text: "needle first page", user: "U11111111" }],
+          };
+        }
+        throw new Error("boom");
+      },
+    };
+    await expect(
+      searchSlack({
+        client: laterPageBroken as never,
+        auth: { auth_type: "standard", token: "x" },
+        options: {
+          workspace_url: "https://workspace.slack.com",
+          query: "needle",
+          kind: "messages",
+          channels: ["C12345678"],
+          limit: 20,
+          max_content_chars: 4000,
+          content_type: "any",
+          download: false,
+        },
+      }),
+    ).rejects.toThrow("boom");
+  });
+
+  test("searchSlack does not resolve users at the result limit without opt-in", async () => {
+    const calls: ApiCall[] = [];
+    const client = createClient(calls) as never;
+
+    const result = await searchSlack({
+      client,
+      auth: { auth_type: "standard", token: "x" },
+      options: {
+        workspace_url: "https://workspace.slack.com",
+        query: "hello",
+        kind: "messages",
+        channels: ["C12345678"],
+        limit: 1,
+        max_content_chars: 4000,
+        content_type: "any",
+        download: false,
+      },
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.referenced_users).toBeUndefined();
+    expect(calls.filter((call) => call.method === "users.info")).toHaveLength(0);
   });
 
   test("search command forwards --refresh-users and bypasses cached user lookups", async () => {
