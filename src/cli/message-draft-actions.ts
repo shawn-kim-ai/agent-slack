@@ -121,12 +121,7 @@ function isAttachedDraftExistsError(err: unknown): boolean {
   return message.includes("attached_draft_exists");
 }
 
-/**
- * Translate an attached_draft_exists failure into an actionable error. Names
- * the conflicting draft when one active unsent draft targets the same channel
- * and thread, so the user can update it instead. Never touches that draft:
- * its unsent text may be the operator's own.
- */
+/** Never auto-updates or deletes the conflicting draft: its unsent text may be the operator's own. */
 async function attachedDraftConflictError(input: {
   client: SlackApiClient;
   channelId: string;
