@@ -1167,7 +1167,7 @@ describe("editMessage", () => {
     ]);
   });
 
-  test("edits a channel target with inline formatting using rich text blocks", async () => {
+  test("edits plain emphasis as text without blocks", async () => {
     const calls: { method: string; params: Record<string, unknown> }[] = [];
     const ctx = createContext(calls);
 
@@ -1178,22 +1178,14 @@ describe("editMessage", () => {
       options: { workspace: "https://workspace.slack.com", ts: "1770165109.628379" },
     });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.method).toBe("chat.update");
-    expect(calls[0]?.params.text).toBe("Update *now*");
-    expect(calls[0]?.params.blocks).toEqual([
+    expect(calls).toEqual([
       {
-        type: "rich_text",
-        elements: [
-          {
-            type: "rich_text_section",
-            elements: [
-              { type: "text", text: "Update " },
-              { type: "text", text: "now", style: { bold: true } },
-              { type: "text", text: "\n" },
-            ],
-          },
-        ],
+        method: "chat.update",
+        params: {
+          channel: "C12345678",
+          ts: "1770165109.628379",
+          text: "Update *now*",
+        },
       },
     ]);
   });
