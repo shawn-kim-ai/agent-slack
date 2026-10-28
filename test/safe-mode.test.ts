@@ -37,34 +37,40 @@ describe("safeModeBlockedError", () => {
   });
 });
 
-test("safe mode blocks CI compose before workspace or API work", async () => {
-  const originalExitCode = process.exitCode;
-  const error = spyOn(console, "error").mockImplementation(() => {});
-  const noWorkCtx = {
-    errorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
-  } as CliContext;
+test.each([
+  ["flag", { env: undefined, flags: ["--safe-mode"] }],
+  ["environment", { env: "1", flags: [] }],
+])(
+  "safe mode from %s blocks CI compose before workspace or API work",
+  async (_source, { env, flags }) => {
+    const originalExitCode = process.exitCode;
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const noWorkCtx = {
+      errorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    } as CliContext;
 
-  try {
-    await withEnvironment({ CI: "1" }, async () => {
-      process.exitCode = 0;
+    try {
+      await withEnvironment({ CI: "1", AGENT_SLACK_SAFE_MODE: env }, async () => {
+        process.exitCode = 0;
 
-      const program = new Command().option("--safe-mode");
-      registerMessageCommand({ program, ctx: noWorkCtx });
-      await program.parseAsync(
-        ["--safe-mode", "message", "compose", "C12345678", "review this first"],
-        { from: "user" },
-      );
+        const program = new Command().option("--safe-mode");
+        registerMessageCommand({ program, ctx: noWorkCtx });
+        await program.parseAsync(
+          [...flags, "message", "compose", "C12345678", "review this first"],
+          { from: "user" },
+        );
 
-      expect(error).toHaveBeenCalledWith(
-        'Safe mode is active: "message compose" cannot skip the editor in CI because that would post without human review.',
-      );
-      expect(process.exitCode).toBe(1);
-    });
-  } finally {
-    process.exitCode = originalExitCode ?? 0;
-    error.mockRestore();
-  }
-});
+        expect(error).toHaveBeenCalledWith(
+          'Safe mode is active: "message compose" cannot skip the editor in CI because that would post without human review.',
+        );
+        expect(process.exitCode).toBe(1);
+      });
+    } finally {
+      process.exitCode = originalExitCode ?? 0;
+      error.mockRestore();
+    }
+  },
+);
 
 describe("redirectSendToDraft", () => {
   test.each([
