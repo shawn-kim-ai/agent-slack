@@ -17,7 +17,7 @@ One command from the repo root. The full run takes about 4 seconds for 23 CLI sp
 .agents/skills/verify-safe-mode-formal/run.sh
 ```
 
-Exit 0 means every cell passed. Exit 1 names each failing cell with what the stub Slack server observed. No installs, no sudo, no network beyond localhost. The check never touches real credentials. Every cell runs the CLI with a blank temp HOME and fake `SLACK_TOKEN`/`SLACK_COOKIE_D` against a stub Slack server on 127.0.0.1.
+Exit 0 means every cell passed. Exit 1 names each failing cell with what the stub Slack server observed. While FINDING-001 below is open, the expected result on main is 21/23 with exit 1. That is the finding showing, not a broken harness. No installs, no sudo, no network beyond localhost. The check never touches real credentials. Every cell runs the CLI with a blank temp HOME and fake `SLACK_TOKEN`/`SLACK_COOKIE_D` against a stub Slack server on 127.0.0.1.
 
 ## What it does
 
