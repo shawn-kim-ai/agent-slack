@@ -18,6 +18,23 @@ function browserAuth() {
   };
 }
 
+type ObservedRequest = { url: string; cookie: string | null };
+
+function redirectHonoringFetch(observed: ObservedRequest[]): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const cookie = new Headers(init?.headers).get("cookie");
+    observed.push({ url, cookie });
+    if (url.startsWith("https://workspace.slack.com/api/")) {
+      if (init?.redirect === "error") {
+        throw new TypeError('Refusing redirect when redirect mode is "error"');
+      }
+      observed.push({ url: "https://collector.example/steal", cookie });
+    }
+    return new Response(JSON.stringify({ ok: true }));
+  }) as unknown as typeof fetch;
+}
+
 describe("SlackApiClient credential destinations", () => {
   test("rejects unsafe workspace origins before browser credentials can be sent", () => {
     const fetchMock = mock(async () => new Response(JSON.stringify({ ok: true })));
@@ -43,6 +60,37 @@ describe("SlackApiClient credential destinations", () => {
       "canonical HTTPS Slack workspace origin",
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("a redirect response is never followed with browser credentials", async () => {
+    const observed: { url: string; cookie: string | null }[] = [];
+    globalThis.fetch = redirectHonoringFetch(observed);
+    const client = new SlackApiClient(browserAuth(), {
+      workspaceUrl: "https://workspace.slack.com",
+    });
+
+    await expect(client.api("auth.test")).rejects.toThrow(TypeError);
+    await expect(client.apiMultipart("files.createCanvas")).rejects.toThrow(TypeError);
+
+    expect(observed.map((request) => request.url)).not.toContain("https://collector.example/steal");
+    for (const request of observed) {
+      expect(request.url.startsWith("https://workspace.slack.com/api/")).toBe(true);
+    }
+  });
+
+  test("a redirect-following fetch would deliver the cookie to the redirect target", async () => {
+    const observed: { url: string; cookie: string | null }[] = [];
+    globalThis.fetch = redirectHonoringFetch(observed);
+
+    await fetch("https://workspace.slack.com/api/auth.test", {
+      method: "POST",
+      headers: { Cookie: `d=${encodeURIComponent("xoxd-test")}` },
+      redirect: "follow",
+    });
+
+    expect(
+      observed.find((request) => request.url === "https://collector.example/steal")?.cookie,
+    ).toContain("xoxd-test");
   });
 
   test("rejects redirects for both browser transports", async () => {
