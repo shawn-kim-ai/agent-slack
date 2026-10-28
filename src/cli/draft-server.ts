@@ -15,20 +15,16 @@ export type DraftEditorConfig = {
 
 export type DraftResult = { sent: true; text: string } | { cancelled: true };
 
-export function openDraftEditor(config: DraftEditorConfig): Promise<DraftResult> {
+export function openDraftEditor(
+  config: DraftEditorConfig,
+  open: (url: string) => void = openBrowser,
+): Promise<DraftResult> {
   return new Promise<DraftResult>((resolve, reject) => {
     let settled = false;
 
-    // Why: the editor can post to Slack as the user, and it listens on
-    // loopback with no other caller authentication. Any local process, and
-    // any web page that can reach loopback, could otherwise POST /send.
-    // A per-session token keeps the capability with the browser tab the
-    // CLI opened: the page gets the token in its injected config and
-    // presents it as a header, which a cross-origin page cannot read or
-    // forge. Origin is checked as a second layer when the browser sends it.
     const sessionToken = randomBytes(32).toString("base64url");
-    const tokenMatches = (candidate: string | null | undefined): boolean => {
-      if (!candidate) {
+    const tokenMatches = (candidate: string | string[] | null | undefined): boolean => {
+      if (typeof candidate !== "string") {
         return false;
       }
       const a = Buffer.from(candidate);
@@ -36,17 +32,25 @@ export function openDraftEditor(config: DraftEditorConfig): Promise<DraftResult>
       return a.length === b.length && timingSafeEqual(a, b);
     };
     const originAllowed = (req: IncomingMessage): boolean => {
-      const origin = req.headers.origin;
+      const { origin } = req.headers;
       if (!origin) {
         return true;
       }
-      return origin === `http://${req.headers.host ?? ""}`;
+      const address = server.address();
+      return (
+        typeof address === "object" &&
+        address !== null &&
+        origin === `http://127.0.0.1:${address.port}`
+      );
     };
 
     const server: Server = createServer(async (req, res) => {
       const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
 
-      if (req.method === "GET" && (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html")) {
+      if (
+        req.method === "GET" &&
+        (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html")
+      ) {
         if (!tokenMatches(requestUrl.searchParams.get("t"))) {
           res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
           res.end("Forbidden");
@@ -59,7 +63,7 @@ export function openDraftEditor(config: DraftEditorConfig): Promise<DraftResult>
       }
 
       if (req.method === "POST" && requestUrl.pathname === "/send") {
-        if (!originAllowed(req) || !tokenMatches(req.headers["x-draft-token"] as string | undefined)) {
+        if (!originAllowed(req) || !tokenMatches(req.headers["x-draft-token"])) {
           res.writeHead(403, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: false, error: "forbidden" }));
           return;
@@ -90,7 +94,7 @@ export function openDraftEditor(config: DraftEditorConfig): Promise<DraftResult>
       }
 
       if (req.method === "POST" && requestUrl.pathname === "/cancel") {
-        if (!originAllowed(req) || !tokenMatches(req.headers["x-draft-token"] as string | undefined)) {
+        if (!originAllowed(req) || !tokenMatches(req.headers["x-draft-token"])) {
           res.writeHead(403, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: false, error: "forbidden" }));
           return;
@@ -135,7 +139,7 @@ export function openDraftEditor(config: DraftEditorConfig): Promise<DraftResult>
       const port = typeof addr === "object" && addr ? addr.port : 0;
       const url = `http://127.0.0.1:${port}/?t=${sessionToken}`;
       process.stderr.write(`Draft editor: ${url}\n`);
-      openBrowser(url);
+      open(url);
     });
   });
 }
