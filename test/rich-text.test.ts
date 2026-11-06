@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CliContext } from "../src/cli/context.ts";
+import { createCliContext, type CliContext } from "../src/cli/context.ts";
 import { editMessage, sendMessage } from "../src/cli/message-actions.ts";
 import { SlackApiClient } from "../src/slack/client.ts";
 import { createDraft, listDrafts, updateDraft } from "../src/slack/drafts.ts";
@@ -626,6 +626,7 @@ describe("textToRichTextBlocks", () => {
     }
     const slackClient = new StubSlackApiClient();
     const ctx: CliContext = {
+      ...createCliContext(),
       effectiveWorkspaceUrl: (flag?: string) => flag,
       assertWorkspaceSpecifiedForChannelNames: async () => {},
       withAutoRefresh: async <T>(input: {
@@ -637,22 +638,6 @@ describe("textToRichTextBlocks", () => {
         auth: { auth_type: "standard", token: "xoxb-stub" },
         workspace_url: "https://workspace.slack.com",
       }),
-      normalizeUrl: (u: string) => u,
-      errorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
-      parseContentType: () => "any",
-      parseCurl: () => ({
-        workspace_url: "https://workspace.slack.com",
-        xoxc_token: "xoxc-1",
-        xoxd_cookie: "xoxd-1",
-      }),
-      importDesktop: async () => ({
-        cookie_d: "",
-        teams: [],
-        source: { leveldb_path: "", cookies_path: "" },
-      }),
-      importChrome: () => ({ cookie_d: "", teams: [] }),
-      importBrave: async () => null,
-      importFirefox: async () => null,
     };
 
     const text =
