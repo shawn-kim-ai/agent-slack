@@ -13,7 +13,6 @@ import { buildSlackMessageUrl } from "../slack/url.ts";
 import { normalizeAttachPaths } from "./options.ts";
 import { resolveSchedulePostAt } from "../slack/scheduled-messages.ts";
 import { buildUnfurlApiParams } from "./unfurl-options.ts";
-import type { OutputFormat } from "../lib/message-text-format.ts";
 
 function loadBlocksFromPath(path: string): unknown[] {
   const raw = path === "-" ? readFileSync(0, "utf8") : readFileSync(path, "utf8");
@@ -41,7 +40,6 @@ function loadBlocksFromPath(path: string): unknown[] {
 
 export type MessageCommandOptions = {
   maxBodyChars: string;
-  format?: OutputFormat;
   workspace?: string;
   ts?: string;
   threadTs?: string;

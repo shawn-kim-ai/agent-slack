@@ -50,7 +50,7 @@ export function registerMessageCommand(input: { program: Command; ctx: CliContex
       "Refresh user profile cache before resolving user IDs (implies --resolve-users)",
     )
     .action(async (...args) => {
-      const [targetInput, options] = args as [string, MessageCommandOptions];
+      const [targetInput, options] = args as [string, MessageCommandOptions & { format?: string }];
       try {
         const format = parseOutputFormat(options.format);
         const payload = await handleMessageGet({ ctx: input.ctx, targetInput, options });
@@ -106,7 +106,7 @@ export function registerMessageCommand(input: { program: Command; ctx: CliContex
       "Refresh user profile cache before resolving user IDs (implies --resolve-users)",
     )
     .action(async (...args) => {
-      const [targetInput, options] = args as [string, MessageCommandOptions];
+      const [targetInput, options] = args as [string, MessageCommandOptions & { format?: string }];
       try {
         const format = parseOutputFormat(options.format);
         const payload = await handleMessageList({ ctx: input.ctx, targetInput, options });

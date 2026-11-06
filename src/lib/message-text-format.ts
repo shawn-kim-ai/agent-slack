@@ -54,7 +54,6 @@ function authorLabel(
   return user?.display_name || user?.real_name || user?.name || id;
 }
 
-/** One line per message: `<local time> <author> [reply] <text>`, newlines collapsed. */
 export function formatMessagesText(
   messages: readonly TextFormattableMessage[],
   users?: Record<string, CompactSlackUser>,
@@ -62,7 +61,7 @@ export function formatMessagesText(
   return messages
     .map((m) => {
       const isReply = m.thread_ts !== undefined && m.thread_ts !== m.ts;
-      const text = (m.content ?? "").replace(/\s*\n\s*/g, " ").trim();
+      const text = (m.content ?? "").replace(/\s*[\r\n]+\s*/g, " ").trim();
       return [formatLocalTs(m.ts), authorLabel(m, users), isReply ? "[reply]" : "", text]
         .filter(Boolean)
         .join(" ");
@@ -70,7 +69,6 @@ export function formatMessagesText(
     .join("\n");
 }
 
-/** Renders a `message get` / `message list` payload in the requested format. */
 export function renderMessagePayload(payload: MessagePayload, format: OutputFormat): string {
   if (format === "json") {
     return JSON.stringify(payload, null, 2);

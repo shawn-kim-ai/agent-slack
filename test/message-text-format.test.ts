@@ -50,16 +50,26 @@ async function runMessageCli(ctx: CliContext, argv: string[]) {
 }
 
 describe("formatMessagesText", () => {
-  test("prints one line per message in TZ=UTC and alternate TZ with newlines collapsed", async () => {
-    const sample = [
-      { ts: "1700000000.000001", author: { user_id: "U1" }, content: "hello\nworld\n\nbye" },
+  test("prints one line per message in TZ=UTC and alternate TZ with newlines collapsed", () => {
+    const cases: [string, string][] = [
+      ["UTC", "2023-11-14 22:13:20 U1 hello world bye"],
+      ["Asia/Tokyo", "2023-11-15 07:13:20 U1 hello world bye"],
     ];
-    await withEnvironment({ TZ: "UTC" }, () => {
-      expect(formatMessagesText(sample)).toBe("2023-11-14 22:13:20 U1 hello world bye");
-    });
-    await withEnvironment({ TZ: "Asia/Tokyo" }, () => {
-      expect(formatMessagesText(sample)).toBe("2023-11-15 07:13:20 U1 hello world bye");
-    });
+    for (const [tz, expected] of cases) {
+      const result = Bun.spawnSync(
+        [
+          process.execPath,
+          "--no-env-file",
+          "-e",
+          `import { formatMessagesText } from "./src/lib/message-text-format.ts";
+           console.log(formatMessagesText([{ ts: "1700000000.000001", author: { user_id: "U1" }, content: "hello\\rworld\\r\\nbye" }]));`,
+        ],
+        { env: { PATH: process.env.PATH, TZ: tz }, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.toString()).toBe("");
+      expect(result.stdout.toString().trim()).toBe(expected);
+    }
   });
 
   test("prefers resolved names, marks replies, and preserves Unicode", async () => {
