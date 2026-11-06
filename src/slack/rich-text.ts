@@ -37,6 +37,7 @@ type TextToRichTextBlocksOptions = {
   includeInlineFormatting?: boolean;
 };
 
+const MAX_LIST_INDENT = 6;
 const BULLET_RE = /^(\s*)[•◦▪▫▸‣●○◆◇\-*]\s+(.*)$/;
 const ORDERED_RE = /^(\s*)\d+[.)]\s+(.*)$/;
 const CODE_BLOCK_START = /^```/;
@@ -360,7 +361,10 @@ function collectList(input: {
 
     const style = orderedMatch != null ? "ordered" : "bullet";
     const match = orderedMatch ?? bulletMatch!;
-    const indent = match[1]!.length >= baseIndent + 2 ? 1 : 0;
+    const indent = Math.min(
+      MAX_LIST_INDENT,
+      Math.max(0, Math.floor((match[1]!.length - baseIndent) / 2)),
+    );
     if (currentStyle !== style || currentIndent !== indent) {
       flush();
       currentStyle = style;
