@@ -48,6 +48,11 @@ describe("agent-facing help contracts", () => {
     expect(optionDescription(send, "--thread-ts")).toContain("channel targets");
     expect(optionDescription(send, "--reply-broadcast")).toContain("DM targets");
     expect(optionDescription(send, "--no-unfurl")).toContain("link and media previews");
+
+    const getCmd = findCommand(buildProgram(), "message", "get");
+    const listCmd = findCommand(buildProgram(), "message", "list");
+    expect(optionDescription(getCmd, "--format")).toContain("json (default) or text");
+    expect(optionDescription(listCmd, "--format")).toContain("json (default) or text");
   });
 
   test("message compose identifies its CI send behavior", () => {

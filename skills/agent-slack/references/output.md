@@ -5,7 +5,7 @@ Slack data commands print JSON to stdout. Help, update, and some authentication 
 - Empty values are pruned (`null`, `[]`, `{}` are removed where possible).
 - `auth whoami` redacts secrets in its output.
 
-`message get` returns one message and an optional thread summary. `message list` returns chronological messages; in thread mode this includes the root and all replies.
+`message get` returns one message and an optional thread summary. `message list` returns chronological messages; in thread mode this includes the root and all replies. Both accept `--format text` to print one line per message (`<local time> <author> [reply] <text>`, with newlines collapsed; thread-mode lists omit `[reply]`) instead of JSON.
 
 Immediate non-attachment sends return `ts` and usually a `permalink`. Attachment sends return neither; scheduled sends return `scheduled_message_id` and `post_at` instead.
 
