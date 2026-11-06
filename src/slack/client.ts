@@ -169,11 +169,13 @@ export class SlackApiClient {
 
     const data: unknown = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(`Slack HTTP ${response.status} calling ${input.method}`);
+      throw Object.assign(new Error(`Slack HTTP ${response.status} calling ${input.method}`), {
+        data,
+      });
     }
     if (!isRecord(data) || data.ok !== true) {
       const error = isRecord(data) && typeof data.error === "string" ? data.error : null;
-      throw new Error(error || `Slack API error calling ${input.method}`);
+      throw Object.assign(new Error(error || `Slack API error calling ${input.method}`), { data });
     }
     return data;
   }
@@ -261,11 +263,13 @@ export class SlackApiClient {
 
     const data: unknown = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(`Slack HTTP ${response.status} calling ${input.method}`);
+      throw Object.assign(new Error(`Slack HTTP ${response.status} calling ${input.method}`), {
+        data,
+      });
     }
     if (!isRecord(data) || data.ok !== true) {
       const error = isRecord(data) && typeof data.error === "string" ? data.error : null;
-      throw new Error(error || `Slack API error calling ${input.method}`);
+      throw Object.assign(new Error(error || `Slack API error calling ${input.method}`), { data });
     }
     return data;
   }

@@ -397,6 +397,13 @@ describe("api CLI subprocess proof (loopback fixture + preload + env -i)", () =>
 
     type ObservedRequest = { path: string; contentType: string; params: Record<string, string> };
     const observed: ObservedRequest[] = [];
+    const errorPayload = {
+      ok: false,
+      error: "custom_fixture_error",
+      needed: "chat:write",
+      provided: "channels:read",
+      response_metadata: { messages: ["fixture error"], warnings: [] },
+    };
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -410,8 +417,10 @@ describe("api CLI subprocess proof (loopback fixture + preload + env -i)", () =>
           entries.filter(([k]) => k !== "token").map(([k, v]) => [k, String(v)]),
         );
         observed.push({ path: url.pathname, contentType, params });
-        if (url.pathname === "/api/error.method") {
-          return Response.json({ ok: false, error: "custom_fixture_error" });
+        if (url.pathname === "/api/error.method" || url.pathname === "/api/http-error.method") {
+          return Response.json(errorPayload, {
+            status: url.pathname === "/api/http-error.method" ? 403 : 200,
+          });
         }
         return Response.json({
           ok: true,
@@ -563,11 +572,23 @@ describe("api CLI subprocess proof (loopback fixture + preload + env -i)", () =>
           items: "[1,2]",
         });
 
-        observed.length = 0;
-        const errRes = await runCli({ target, args: ["api", "error.method"] });
-        expect(errRes.exitCode).toBe(1);
-        expect(JSON.parse(errRes.stdout)).toEqual({ ok: false, error: "custom_fixture_error" });
-        expect(errRes.stderr).toContain("custom_fixture_error");
+        for (const method of ["error.method", "http-error.method"]) {
+          for (const multipart of [false, true]) {
+            observed.length = 0;
+            const errRes = await runCli({
+              target,
+              args: ["api", method, ...(multipart ? ["--multipart"] : [])],
+            });
+            expect(errRes.exitCode).toBe(1);
+            expect(JSON.parse(errRes.stdout)).toEqual(errorPayload);
+            expect(errRes.stderr).toContain(
+              method === "error.method"
+                ? "custom_fixture_error"
+                : "Slack HTTP 403 calling http-error.method",
+            );
+            expect(observed).toHaveLength(1);
+          }
+        }
 
         for (const method of EXPECTED_ALLOWED_READ_METHODS) {
           observed.length = 0;
