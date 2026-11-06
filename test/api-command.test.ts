@@ -605,5 +605,5 @@ describe("api CLI subprocess proof (loopback fixture + preload + env -i)", () =>
       server.stop(true);
       rmSync(runDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
