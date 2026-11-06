@@ -2,20 +2,6 @@ import type { Command } from "commander";
 import { type CliContext, errorMessage } from "./context.ts";
 import { isSafeModeEnabled } from "./safe-mode.ts";
 
-/**
- * Individually reviewed Slack Web API read-only methods permitted in safe mode:
- * - auth.test: Check authentication and identity (https://docs.slack.dev/reference/methods/auth.test/)
- * - conversations.history: Fetch a conversation's message history (https://docs.slack.dev/reference/methods/conversations.history/)
- * - conversations.replies: Retrieve a message thread (https://docs.slack.dev/reference/methods/conversations.replies/)
- * - conversations.info: Retrieve metadata about a conversation (https://docs.slack.dev/reference/methods/conversations.info/)
- * - users.info: Retrieve information about a user (https://docs.slack.dev/reference/methods/users.info/)
- * - users.list: List all users in a Slack team (https://docs.slack.dev/reference/methods/users.list/)
- * - chat.getPermalink: Retrieve a permalink URL for a specific message (https://docs.slack.dev/reference/methods/chat.getPermalink/)
- * - search.messages: Search for messages matching a query (https://docs.slack.dev/reference/methods/search.messages/)
- * - search.files: Search for files matching a query (https://docs.slack.dev/reference/methods/search.files/)
- * - files.info: Retrieve information about a file (https://docs.slack.dev/reference/methods/files.info/)
- * - files.list: List files within a team, channel, or user scope (https://docs.slack.dev/reference/methods/files.list/)
- */
 const SAFE_MODE_READ_ONLY_API_METHODS: ReadonlySet<string> = new Set([
   "auth.test",
   "conversations.history",

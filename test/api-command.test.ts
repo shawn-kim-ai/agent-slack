@@ -544,12 +544,24 @@ describe("api CLI subprocess proof (loopback fixture + preload + env -i)", () =>
         observed.length = 0;
         const safeOffMultipart = await runCli({
           target,
-          args: ["api", "saved.update", "--multipart", "-f", "item_id=C123"],
+          args: [
+            "api",
+            "saved.update",
+            "--multipart",
+            "-f",
+            "item_id=C123",
+            "--params",
+            '{"nested":{"a":1},"items":[1,2]}',
+          ],
         });
         expect(safeOffMultipart.exitCode).toBe(0);
         expect(observed[0]?.path).toBe("/api/saved.update");
         expect(observed[0]?.contentType).toContain("multipart/form-data");
-        expect(observed[0]?.params).toEqual({ item_id: "C123" });
+        expect(observed[0]?.params).toEqual({
+          item_id: "C123",
+          nested: '{"a":1}',
+          items: "[1,2]",
+        });
 
         observed.length = 0;
         const errRes = await runCli({ target, args: ["api", "error.method"] });
