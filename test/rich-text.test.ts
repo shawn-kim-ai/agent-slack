@@ -32,6 +32,61 @@ describe("parseInlineElements", () => {
     ]);
   });
 
+  test("tildes used as approximately are not parsed as strike", () => {
+    const text = "Checked (~775k rows, ~11.9k users) and ~6,900 accounts, all ~19,250";
+    expect(parseInlineElements(text)).toEqual([{ type: "text", text }]);
+  });
+
+  test("underscores inside identifiers are not parsed as italic", () => {
+    const text = "ACTIVE_FLAG and user_id stay literal, as does snake_case_name";
+    expect(parseInlineElements(text)).toEqual([{ type: "text", text }]);
+  });
+
+  test("multiplication and spaced asterisks are not parsed as bold", () => {
+    const text = "2*3*4 and a * b * c";
+    expect(parseInlineElements(text)).toEqual([{ type: "text", text }]);
+  });
+
+  test.each(["*", "_", "~"])("requires both boundaries for %s", (marker) => {
+    const span = `${marker}word${marker}`;
+    for (const text of [
+      `a${span}`,
+      `${span}9`,
+      `${marker} word${marker}`,
+      `${marker}word ${marker}`,
+    ]) {
+      expect(parseInlineElements(text)).toEqual([{ type: "text", text }]);
+    }
+  });
+
+  test("double underscores stay literal", () => {
+    const text = "__italic__";
+    expect(parseInlineElements(text)).toEqual([{ type: "text", text }]);
+  });
+
+  test("formatting next to punctuation is still parsed", () => {
+    expect(parseInlineElements("(_note_), *done*. ~old~!")).toEqual([
+      { type: "text", text: "(" },
+      { type: "text", text: "note", style: { italic: true } },
+      { type: "text", text: "), " },
+      { type: "text", text: "done", style: { bold: true } },
+      { type: "text", text: ". " },
+      { type: "text", text: "old", style: { strike: true } },
+      { type: "text", text: "!" },
+    ]);
+  });
+
+  test("Korean particles adjacent to formatting keep their text", () => {
+    expect(parseInlineElements("*강조*는 _기울임_을 ~삭제~로 표시")).toEqual([
+      { type: "text", text: "강조", style: { bold: true } },
+      { type: "text", text: "는 " },
+      { type: "text", text: "기울임", style: { italic: true } },
+      { type: "text", text: "을 " },
+      { type: "text", text: "삭제", style: { strike: true } },
+      { type: "text", text: "로 표시" },
+    ]);
+  });
+
   test("`code` is parsed with code style", () => {
     expect(parseInlineElements("Run `npm install`")).toEqual([
       { type: "text", text: "Run " },
