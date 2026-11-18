@@ -88,28 +88,35 @@ function completedFileIds(resp: unknown): (string | undefined)[] | undefined {
   return files.map((f) => (isRecord(f) ? getString(f.id) || undefined : undefined));
 }
 
-/**
- * Upload a local file and attach it to a Slack message in one shot. The
- * completion call binds the file to `channelId` (and optionally the thread),
- * so the file posts with `initialComment` immediately.
- */
-export async function uploadLocalFileToSlack(input: {
+async function stageFileUploads(input: {
+  client: SlackApiClient;
+  filePaths: string[];
+}): Promise<{ id: string; title: string }[]> {
+  const files: { id: string; title: string }[] = [];
+  for (const filePath of input.filePaths) {
+    const { fileId, filename } = await stageFileUpload({ client: input.client, filePath });
+    files.push({ id: fileId, title: filename });
+  }
+  return files;
+}
+
+export async function uploadLocalFilesToSlack(input: {
   client: SlackApiClient;
   channelId: string;
-  filePath: string;
+  filePaths: string[];
   threadTs?: string;
   initialComment?: string;
+  blocks?: unknown[] | null;
 }): Promise<void> {
-  const { fileId, filename } = await stageFileUpload({
-    client: input.client,
-    filePath: input.filePath,
-  });
+  const files = await stageFileUploads(input);
 
   const completeResp = await input.client.api("files.completeUploadExternal", {
-    files: [{ id: fileId, title: filename }],
+    files,
     channel_id: input.channelId,
     thread_ts: input.threadTs,
-    initial_comment: input.initialComment?.trim() || undefined,
+    ...(input.blocks
+      ? { blocks: input.blocks }
+      : { initial_comment: input.initialComment?.trim() || undefined }),
   });
 
   ensureCompleteOk(completeResp);
@@ -127,13 +134,10 @@ export async function uploadFilesForDraft(input: {
   client: SlackApiClient;
   filePaths: string[];
 }): Promise<string[]> {
-  const staged: { fileId: string; filename: string }[] = [];
-  for (const filePath of input.filePaths) {
-    staged.push(await stageFileUpload({ client: input.client, filePath }));
-  }
+  const files = await stageFileUploads(input);
 
   const completeResp = await input.client.api("files.completeUploadExternal", {
-    files: staged.map((s) => ({ id: s.fileId, title: s.filename })),
+    files,
   });
 
   ensureCompleteOk(completeResp);
@@ -143,8 +147,8 @@ export async function uploadFilesForDraft(input: {
   // of a different length tells us nothing about which id belongs to which
   // file, and guessing there would attach the wrong file to the draft.
   const ids = completedFileIds(completeResp);
-  const aligned = ids?.length === staged.length ? ids : undefined;
-  return staged.map((s, i) => aligned?.[i] ?? s.fileId);
+  const aligned = ids?.length === files.length ? ids : undefined;
+  return files.map((file, i) => aligned?.[i] ?? file.id);
 }
 
 /**
