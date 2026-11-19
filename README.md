@@ -269,6 +269,21 @@ agent-slack message draft update "DR_ID" "Latest numbers" --attach ./appendix.pd
 
 Slack attaches each draft to one channel or thread composer. If `create` fails because a draft is already attached, update that draft or delete it first.
 
+Pass `--json` to a draft subcommand to read command failures from stdout. Success output stays the same. Failures still exit with status 1 and return an object such as:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "attached_draft_exists",
+    "message": "A draft is already attached to this channel",
+    "draft_id": "Dr123"
+  }
+}
+```
+
+`error.code` uses the Slack error code when available and `draft_error` otherwise. A duplicate-create failure includes `error.draft_id` when the existing draft is found. CLI argument syntax errors use stderr.
+
 ### Safe mode (enforced human-in-the-loop)
 
 Skill instructions like "always use `draft`, never `send`" are guidance an agent can ignore. Safe mode enforces it at the tool level — useful when an AI agent has access to `agent-slack` and you want a guarantee that nothing posts without human review.

@@ -1,11 +1,13 @@
 import type { Command } from "commander";
 import type { CliContext } from "./context.ts";
 import {
+  AttachedDraftConflictError,
   createDraftAction,
   deleteDraftAction,
   listDraftsAction,
   updateDraftAction,
 } from "./message-draft-actions.ts";
+import { getString, isRecord } from "../lib/object-type-guards.ts";
 import { collectOptionValue } from "./options.ts";
 
 export function registerMessageDraftCommand(input: { messageCmd: Command; ctx: CliContext }): void {
@@ -14,10 +16,30 @@ export function registerMessageDraftCommand(input: { messageCmd: Command; ctx: C
     .description(
       "Manage Slack-native message drafts (appear in the user's Slack client; requires browser auth)",
     )
+    .option("--json", "Print command failures as JSON on stdout")
     .addHelpText(
       "after",
       "\nNote: the browser compose editor moved to `agent-slack message compose <target> [text]`.",
     );
+
+  function reportError(err: unknown): void {
+    const message = input.ctx.errorMessage(err);
+    if (draftCmd.opts().json) {
+      const conflict = err instanceof AttachedDraftConflictError ? err : undefined;
+      const data = isRecord(err) && isRecord(err.data) ? err.data : undefined;
+      const code = conflict ? "attached_draft_exists" : getString(data?.error) || "draft_error";
+      console.log(
+        JSON.stringify(
+          { ok: false, error: { code, message, draft_id: conflict?.draftId } },
+          null,
+          2,
+        ),
+      );
+    } else {
+      console.error(message);
+    }
+    process.exitCode = 1;
+  }
 
   draftCmd
     .command("list")
@@ -30,8 +52,7 @@ export function registerMessageDraftCommand(input: { messageCmd: Command; ctx: C
         const payload = await listDraftsAction({ ctx: input.ctx, options });
         console.log(JSON.stringify(payload, null, 2));
       } catch (err: unknown) {
-        console.error(input.ctx.errorMessage(err));
-        process.exitCode = 1;
+        reportError(err);
       }
     });
 
@@ -68,8 +89,7 @@ export function registerMessageDraftCommand(input: { messageCmd: Command; ctx: C
         const payload = await createDraftAction({ ctx: input.ctx, targetInput, text, options });
         console.log(JSON.stringify(payload, null, 2));
       } catch (err: unknown) {
-        console.error(input.ctx.errorMessage(err));
-        process.exitCode = 1;
+        reportError(err);
       }
     });
 
@@ -116,8 +136,7 @@ export function registerMessageDraftCommand(input: { messageCmd: Command; ctx: C
         const payload = await updateDraftAction({ ctx: input.ctx, draftId, text, options });
         console.log(JSON.stringify(payload, null, 2));
       } catch (err: unknown) {
-        console.error(input.ctx.errorMessage(err));
-        process.exitCode = 1;
+        reportError(err);
       }
     });
 
@@ -136,8 +155,7 @@ export function registerMessageDraftCommand(input: { messageCmd: Command; ctx: C
         const payload = await deleteDraftAction({ ctx: input.ctx, draftId, options });
         console.log(JSON.stringify(payload, null, 2));
       } catch (err: unknown) {
-        console.error(input.ctx.errorMessage(err));
-        process.exitCode = 1;
+        reportError(err);
       }
     });
 
