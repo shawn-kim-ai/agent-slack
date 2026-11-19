@@ -121,13 +121,22 @@ function isAttachedDraftExistsError(err: unknown): boolean {
   return message.includes("attached_draft_exists");
 }
 
+export class AttachedDraftConflictError extends Error {
+  readonly draftId?: string;
+
+  constructor(message: string, options: { cause: unknown; draftId?: string }) {
+    super(message, { cause: options.cause });
+    this.draftId = options.draftId;
+  }
+}
+
 /** Never auto-updates or deletes the conflicting draft: its unsent text may be the operator's own. */
 async function attachedDraftConflictError(input: {
   client: SlackApiClient;
   channelId: string;
   threadTs?: string;
   cause: unknown;
-}): Promise<Error> {
+}): Promise<AttachedDraftConflictError> {
   let existingId: string | undefined;
   try {
     const { drafts } = await listDrafts(input.client);
@@ -143,14 +152,14 @@ async function attachedDraftConflictError(input: {
   }
   const where = input.threadTs ? "this thread" : "this channel";
   if (!existingId) {
-    return new Error(
+    return new AttachedDraftConflictError(
       `A draft is already attached to ${where}. Run "agent-slack message draft list" to find it, then "agent-slack message draft update <draft-id> <text>" to edit it, or delete it first`,
       { cause: input.cause },
     );
   }
-  return new Error(
+  return new AttachedDraftConflictError(
     `A draft (${existingId}) is already attached to ${where}. Run "agent-slack message draft update ${existingId} <text>" to edit it, or delete it first`,
-    { cause: input.cause },
+    { cause: input.cause, draftId: existingId },
   );
 }
 
