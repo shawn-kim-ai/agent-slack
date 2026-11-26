@@ -11,7 +11,7 @@ Use `agent-slack` from `$PATH`. If it is missing, install it with:
 curl -fsSL https://raw.githubusercontent.com/stablyai/agent-slack/main/install.sh | sh
 ```
 
-Windows PowerShell: `irm https://raw.githubusercontent.com/stablyai/agent-slack/main/install.ps1 | iex`. Fallback: `npm i -g agent-slack` (Node >= 22.5).
+Windows (recommended, works under WDAC/Smart App Control): `npm i -g agent-slack` (Node >= 22.5). Standalone unsigned binary fallback: `irm https://raw.githubusercontent.com/stablyai/agent-slack/main/install.ps1 | iex`.
 
 Run `agent-slack --help` or the relevant subcommand help before guessing a command or flag.
 If a capability named here is absent from installed help, report version skew instead of guessing. Do not self-update the CLI without explicit authorization.

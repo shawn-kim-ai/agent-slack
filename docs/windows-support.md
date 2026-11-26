@@ -52,12 +52,13 @@ This document captures the architecture, trade-offs, and phased implementation p
 
 ## Phase 3: Native Installer, DPAPI Credential Store & Docs
 
-### 3.1 PowerShell Installer (`install.ps1`)
+### 3.1 Distribution, WDAC / Smart App Control & PowerShell Installer (`install.ps1`)
 
-- Native `irm ... | iex` installer for Windows PowerShell 5.1+ and PowerShell 7+:
+- **Primary Windows install (`npm i -g agent-slack`)**: Runs the bundled JS CLI on the signed `node.exe` runtime (Node >= 22.5), avoiding unsigned standalone `.exe` blocks under Windows Smart App Control and enterprise WDAC without requiring code-signing infrastructure.
+- **Standalone installer (`install.ps1`)**: Optional `irm ... | iex` installer for Windows PowerShell 5.1+ and PowerShell 7+:
   - Detects true CPU architecture (`AMD64` / `ARM64`) via registry (works under x64 emulation on ARM64).
-  - Downloads `agent-slack-windows-{x64|arm64}.exe` and verifies SHA-256 against `checksums-sha256.txt`.
-  - Installs to `%LOCALAPPDATA%\agent-slack\bin\agent-slack.exe` (overridable via `AGENT_SLACK_INSTALL_DIR`) and registers it in user `HKCU\Environment\Path` with `WM_SETTINGCHANGE` broadcast.
+  - Downloads `agent-slack-windows-{x64|arm64}.exe`, verifies SHA-256 against `checksums-sha256.txt`, stages `.new` before swapping, and registers `%LOCALAPPDATA%\agent-slack\bin` in user `HKCU\Environment\Path` with `WM_SETTINGCHANGE` broadcast.
+  - Smoke-checks `$DestBin --version` after install and warns with the `npm i -g agent-slack` fallback if Windows Application Control blocks execution.
 
 ### 3.2 Windows DPAPI Credential Storage (`src/auth/store.ts`, `src/auth/windows-dpapi.ts`)
 

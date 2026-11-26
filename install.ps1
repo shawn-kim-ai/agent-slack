@@ -116,6 +116,13 @@ public static extern IntPtr SendMessageTimeout(
 
     Write-Host "Installed agent-slack to $DestBin"
 
+    try {
+      $null = & $DestBin --version 2>&1
+    } catch {
+      Write-Warning "Windows blocked running the unsigned binary ($($_.Exception.Message))."
+      Write-Warning "On machines with Smart App Control or WDAC enabled, install via npm instead: npm i -g agent-slack (requires Node >= 22.5)."
+    }
+
     if (-not $NoPathUpdate) {
       $RegKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
       try {
