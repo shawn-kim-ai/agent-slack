@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync, unlinkSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, win32 } from "node:path";
@@ -109,6 +110,10 @@ export async function checkForUpdate(force = false): Promise<{
 
 export type InstallMethod = "binary" | "npm" | "bun";
 
+function executableBaseName(execPath: string): string {
+  return (execPath.includes("\\") ? win32.basename(execPath) : basename(execPath)).toLowerCase();
+}
+
 /**
  * Detect how agent-slack was installed so we can use the right update strategy.
  *
@@ -116,10 +121,6 @@ export type InstallMethod = "binary" | "npm" | "bun";
  * - "bun"    → running via Bun runtime (bun install -g agent-slack / bunx)
  * - "binary" → standalone compiled binary (GitHub release)
  */
-function executableBaseName(execPath: string): string {
-  return (execPath.includes("\\") ? win32.basename(execPath) : basename(execPath)).toLowerCase();
-}
-
 export function detectInstallMethod(
   execPath: string = process.execPath,
   env: NodeJS.ProcessEnv = process.env,
@@ -203,27 +204,44 @@ export async function replaceBinaryFile(input: {
 }): Promise<{ backupCleanupDeferred: boolean }> {
   const targetPlatform = input.platform ?? process.platform;
   const ops: ReplaceBinaryOps = input.ops ?? { rename, copyFile, chmod, rm };
+  const stagedPath = `${input.targetPath}.new`;
   const backupPath = `${input.targetPath}.bak`;
 
-  // Rename current -> backup, copy new -> current, remove backup.
-  // On Windows, a running .exe can be renamed, but the renamed .bak cannot be
-  // deleted until this process exits; defer cleanup to the next CLI invocation.
-  await ops.rename(input.targetPath, backupPath);
+  // 1. Stage the new binary on the same volume before touching the live binary.
+  await ops.copyFile(input.sourcePath, stagedPath);
   try {
-    await ops.copyFile(input.sourcePath, input.targetPath);
     if (targetPlatform !== "win32") {
-      await ops.chmod(input.targetPath, 0o755);
+      await ops.chmod(stagedPath, 0o755);
     }
   } catch (err) {
-    // Restore backup on copy/chmod failure so the binary is never left missing.
+    await ops.rm(stagedPath, { force: true }).catch(() => {});
+    throw err;
+  }
+
+  // 2. Move current -> backup, then atomically rename staged -> current.
+  try {
+    await ops.rename(input.targetPath, backupPath);
+  } catch (err) {
+    await ops.rm(stagedPath, { force: true }).catch(() => {});
+    throw err;
+  }
+
+  try {
+    await ops.rename(stagedPath, input.targetPath);
+  } catch (err) {
+    await ops.rm(stagedPath, { force: true }).catch(() => {});
     try {
       await ops.rename(backupPath, input.targetPath);
-    } catch {
-      // ignore restore failure
+    } catch (restoreErr) {
+      throw new Error(
+        `Failed to install updated binary and failed to restore backup; recover manually from "${backupPath}".`,
+        { cause: new AggregateError([err, restoreErr], "update and rollback both failed") },
+      );
     }
     throw err;
   }
 
+  // 3. Remove backup; on Windows, a running .exe cannot be unlinked until exit.
   try {
     await ops.rm(backupPath, { force: true });
     return { backupCleanupDeferred: false };
@@ -237,7 +255,8 @@ export async function replaceBinaryFile(input: {
 
 /**
  * Best-effort cleanup of a stale `.bak` binary left behind by a previous
- * Windows self-update. Fire-and-forget; never throws.
+ * Windows self-update. Runs synchronously only when the file exists so short
+ * commands (`--version`, `--help`) reliably clean it up.
  */
 export function cleanupStaleBackupBinary(
   execPath: string = process.execPath,
@@ -250,7 +269,15 @@ export function cleanupStaleBackupBinary(
   if (["bun", "bun.exe", "node", "nodejs", "node.exe"].includes(execName)) {
     return;
   }
-  void rm(`${execPath}.bak`, { force: true }).catch(() => {});
+  const backupPath = `${execPath}.bak`;
+  if (!existsSync(backupPath)) {
+    return;
+  }
+  try {
+    unlinkSync(backupPath);
+  } catch {
+    // ignore if still locked
+  }
 }
 
 /**

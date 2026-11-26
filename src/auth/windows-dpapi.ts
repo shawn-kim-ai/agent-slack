@@ -1,14 +1,22 @@
 import { execFileSync } from "node:child_process";
+import { win32 } from "node:path";
 
-const DEFAULT_DPAPI_TIMEOUT_MS = 10_000;
+export const DEFAULT_DPAPI_TIMEOUT_MS = 10_000;
 
 export type DpapiOptions = {
   timeoutMs?: number;
 };
 
-const PS_BASE_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"];
+export type PowerShellRunOptions = {
+  script: string;
+  input?: string;
+  timeoutMs?: number;
+};
+
+const PS_BASE_ARGS = ["-NoProfile", "-NonInteractive", "-Command"];
 
 const PS_UNPROTECT_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
   "Add-Type -AssemblyName System.Security",
   "$b64 = [Console]::In.ReadToEnd().Trim()",
   "$enc = [Convert]::FromBase64String($b64)",
@@ -17,6 +25,7 @@ const PS_UNPROTECT_SCRIPT = [
 ].join("; ");
 
 const PS_PROTECT_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
   "Add-Type -AssemblyName System.Security",
   "$b64 = [Console]::In.ReadToEnd().Trim()",
   "$raw = [Convert]::FromBase64String($b64)",
@@ -24,37 +33,45 @@ const PS_PROTECT_SCRIPT = [
   "[Console]::Out.Write([Convert]::ToBase64String($enc))",
 ].join("; ");
 
+export function resolveWindowsSystemBinary(
+  relativeUnderSystem32: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const systemRoot = env.SystemRoot || env.WINDIR || "C:\\Windows";
+  return win32.join(systemRoot, "System32", relativeUnderSystem32);
+}
+
+export function runWindowsPowerShell(options: PowerShellRunOptions): string {
+  const psExe = resolveWindowsSystemBinary("WindowsPowerShell\\v1.0\\powershell.exe");
+  const timeout = options.timeoutMs ?? DEFAULT_DPAPI_TIMEOUT_MS;
+  return execFileSync(psExe, [...PS_BASE_ARGS, options.script], {
+    input: options.input,
+    encoding: "utf8",
+    stdio: [options.input !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+    timeout,
+  }).trim();
+}
+
 function runDpapiPowerShell(input: {
   script: string;
   data: Buffer;
   options?: DpapiOptions;
 }): Buffer {
-  const timeout = input.options?.timeoutMs ?? DEFAULT_DPAPI_TIMEOUT_MS;
-  const stdout = execFileSync("powershell", [...PS_BASE_ARGS, input.script], {
+  const stdout = runWindowsPowerShell({
+    script: input.script,
     input: input.data.toString("base64"),
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "pipe"],
-    timeout,
-  }).trim();
-
+    timeoutMs: input.options?.timeoutMs ?? DEFAULT_DPAPI_TIMEOUT_MS,
+  });
   if (!stdout) {
     throw new Error("DPAPI PowerShell command returned empty output");
   }
   return Buffer.from(stdout, "base64");
 }
 
-/**
- * Decrypt a DPAPI-protected buffer for the current Windows user via PowerShell
- * stdin/stdout base64 transport (avoids writing decrypted secrets to disk).
- */
 export function dpapiUnprotect(encrypted: Buffer, options: DpapiOptions = {}): Buffer {
   return runDpapiPowerShell({ script: PS_UNPROTECT_SCRIPT, data: encrypted, options });
 }
 
-/**
- * Encrypt a buffer for the current Windows user via DPAPI (CurrentUser scope)
- * using PowerShell stdin/stdout base64 transport.
- */
 export function dpapiProtect(plaintext: Buffer, options: DpapiOptions = {}): Buffer {
   return runDpapiPowerShell({ script: PS_PROTECT_SCRIPT, data: plaintext, options });
 }

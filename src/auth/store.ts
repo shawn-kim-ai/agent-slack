@@ -2,31 +2,24 @@ import { CREDENTIALS_FILE, KEYCHAIN_SERVICE } from "./paths.ts";
 import { readJsonFile, writeJsonFile } from "../lib/fs.ts";
 import { CredentialsSchema, type Credentials, type Workspace } from "./schema.ts";
 import { keychainGet, keychainSet } from "./keychain.ts";
-import { dpapiProtect, dpapiUnprotect } from "./windows-dpapi.ts";
-import { isRecord } from "../lib/object-type-guards.ts";
+import {
+  DPAPI_PLACEHOLDER,
+  hydrateWindowsDpapiCredentials,
+  sealWindowsDpapiCredentials,
+} from "./windows-credential-store.ts";
 import { platform } from "node:os";
 
+export {
+  hydrateWindowsDpapiCredentials,
+  sealWindowsDpapiCredentials,
+  type DpapiStoreOps,
+} from "./windows-credential-store.ts";
+
 const KEYCHAIN_PLACEHOLDER = "__KEYCHAIN__";
-const DPAPI_PLACEHOLDER = "__DPAPI__";
 const IS_MACOS = platform() === "darwin";
 const IS_WIN32 = platform() === "win32";
 
-export type DpapiStoreOps = {
-  protect: (plaintext: Buffer) => Buffer;
-  unprotect: (encrypted: Buffer) => Buffer;
-};
-
-const DEFAULT_DPAPI_OPS: DpapiStoreOps = {
-  protect: (plaintext) => dpapiProtect(plaintext),
-  unprotect: (encrypted) => dpapiUnprotect(encrypted),
-};
-
-type DpapiSecretBag = {
-  xoxd?: string;
-  xoxd_by_workspace: Record<string, string>;
-  xoxc: Record<string, string>;
-  token: Record<string, string>;
-};
+let cachedWindowsCredentials: { creds: Credentials; wasSealed: boolean } | null = null;
 
 function normalizeWorkspaceUrl(workspaceUrl: string): string {
   const u = new URL(workspaceUrl);
@@ -37,191 +30,11 @@ function isPlaceholderSecret(value: string | undefined): boolean {
   return !value || value === KEYCHAIN_PLACEHOLDER || value === DPAPI_PLACEHOLDER;
 }
 
-function extractStringRecord(value: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (isRecord(value)) {
-    for (const [k, v] of Object.entries(value)) {
-      if (typeof v === "string") {
-        out[k] = v;
-      }
-    }
-  }
-  return out;
-}
-
-function parseDpapiSecretBag(raw: Buffer): DpapiSecretBag | null {
-  try {
-    const parsed: unknown = JSON.parse(raw.toString("utf8"));
-    if (!isRecord(parsed)) {
-      return null;
-    }
-    const xoxd = typeof parsed.xoxd === "string" ? parsed.xoxd : undefined;
-    return {
-      xoxd,
-      xoxd_by_workspace: extractStringRecord(parsed.xoxd_by_workspace),
-      xoxc: extractStringRecord(parsed.xoxc),
-      token: extractStringRecord(parsed.token),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function hasDpapiPlaceholder(workspaces: Workspace[]): boolean {
-  return workspaces.some((w) =>
-    w.auth.auth_type === "browser"
-      ? w.auth.xoxc_token === DPAPI_PLACEHOLDER || w.auth.xoxd_cookie === DPAPI_PLACEHOLDER
-      : w.auth.token === DPAPI_PLACEHOLDER,
-  );
-}
-
-type SecretLookup = {
-  getXoxc: (url: string, current: string) => string | null | undefined;
-  getXoxd: (url: string, current: string) => string | null | undefined;
-  getToken: (url: string, current: string) => string | null | undefined;
-};
-
-function hydrateWorkspaces(workspaces: Workspace[], lookup: SecretLookup): Workspace[] {
-  return workspaces.map((w) => {
-    const url = normalizeWorkspaceUrl(w.workspace_url);
-    if (w.auth.auth_type === "browser") {
-      return {
-        ...w,
-        auth: {
-          auth_type: "browser" as const,
-          xoxc_token: lookup.getXoxc(url, w.auth.xoxc_token) ?? w.auth.xoxc_token,
-          xoxd_cookie: lookup.getXoxd(url, w.auth.xoxd_cookie) ?? w.auth.xoxd_cookie,
-        },
-      };
-    }
-    if (w.auth.auth_type === "standard") {
-      return {
-        ...w,
-        auth: {
-          auth_type: "standard" as const,
-          token: lookup.getToken(url, w.auth.token) ?? w.auth.token,
-        },
-      };
-    }
-    return w;
-  });
-}
-
-export function hydrateWindowsDpapiCredentials(
-  creds: Credentials,
-  ops: DpapiStoreOps = DEFAULT_DPAPI_OPS,
-): Credentials {
-  const { dpapi_secrets: dpapiSecrets, ...rest } = creds;
-  if (!dpapiSecrets) {
-    return rest;
-  }
-
-  let bag: DpapiSecretBag | null = null;
-  let decryptError: unknown;
-  try {
-    const decrypted = ops.unprotect(Buffer.from(dpapiSecrets, "base64"));
-    bag = parseDpapiSecretBag(decrypted);
-  } catch (err) {
-    decryptError = err;
-    bag = null;
-  }
-
-  if (!bag) {
-    if (hasDpapiPlaceholder(rest.workspaces)) {
-      throw new Error(
-        "Failed to decrypt Windows DPAPI credentials; refusing to continue with placeholder tokens to avoid overwriting stored secrets.",
-        { cause: decryptError },
-      );
-    }
-    return rest;
-  }
-
-  const workspaces = hydrateWorkspaces(rest.workspaces, {
-    getXoxc: (url, current) => (current === DPAPI_PLACEHOLDER ? bag.xoxc[url] : current),
-    getXoxd: (url, current) =>
-      current === DPAPI_PLACEHOLDER ? (bag.xoxd_by_workspace[url] ?? bag.xoxd) : current,
-    getToken: (url, current) => (current === DPAPI_PLACEHOLDER ? bag.token[url] : current),
-  });
-
-  return { ...rest, workspaces };
-}
-
-export function sealWindowsDpapiCredentials(
-  payload: Credentials,
-  ops: DpapiStoreOps = DEFAULT_DPAPI_OPS,
-): Credentials {
-  const { dpapi_secrets: existingEnvelope, ...clean } = payload;
-  if (hasDpapiPlaceholder(clean.workspaces)) {
-    throw new Error(
-      "Refusing to save credentials containing unhydrated Windows DPAPI placeholders.",
-    );
-  }
-
-  const bag: DpapiSecretBag = { xoxd_by_workspace: {}, xoxc: {}, token: {} };
-  let hasSecret = false;
-
-  for (const w of clean.workspaces) {
-    const url = normalizeWorkspaceUrl(w.workspace_url);
-    if (w.auth.auth_type === "browser") {
-      if (!isPlaceholderSecret(w.auth.xoxc_token)) {
-        bag.xoxc[url] = w.auth.xoxc_token;
-        hasSecret = true;
-      }
-      if (!isPlaceholderSecret(w.auth.xoxd_cookie)) {
-        bag.xoxd_by_workspace[url] = w.auth.xoxd_cookie;
-        hasSecret = true;
-      }
-    } else if (w.auth.auth_type === "standard") {
-      if (!isPlaceholderSecret(w.auth.token)) {
-        bag.token[url] = w.auth.token;
-        hasSecret = true;
-      }
-    }
-  }
-
-  if (!hasSecret) {
-    void existingEnvelope;
-    return clean;
-  }
-
-  try {
-    const encrypted = ops.protect(Buffer.from(JSON.stringify(bag), "utf8"));
-    const sealedWorkspaces = clean.workspaces.map((w) => {
-      const url = normalizeWorkspaceUrl(w.workspace_url);
-      if (w.auth.auth_type === "browser") {
-        return {
-          ...w,
-          auth: {
-            auth_type: "browser" as const,
-            xoxc_token: bag.xoxc[url] ? DPAPI_PLACEHOLDER : w.auth.xoxc_token,
-            xoxd_cookie: bag.xoxd_by_workspace[url] ? DPAPI_PLACEHOLDER : w.auth.xoxd_cookie,
-          },
-        };
-      }
-      if (w.auth.auth_type === "standard") {
-        return {
-          ...w,
-          auth: {
-            auth_type: "standard" as const,
-            token: bag.token[url] ? DPAPI_PLACEHOLDER : w.auth.token,
-          },
-        };
-      }
-      return w;
-    });
-
-    return {
-      ...clean,
-      dpapi_secrets: encrypted.toString("base64"),
-      workspaces: sealedWorkspaces,
-    };
-  } catch {
-    // Fall back to plaintext storage if DPAPI is unavailable.
-    return clean;
-  }
-}
-
 export async function loadCredentials(): Promise<Credentials> {
+  if (IS_WIN32 && cachedWindowsCredentials) {
+    return structuredClone(cachedWindowsCredentials.creds);
+  }
+
   const fromFile = await readJsonFile<unknown>(CREDENTIALS_FILE);
   const parsed = CredentialsSchema.safeParse(fromFile ?? { version: 1, workspaces: [] });
   if (!parsed.success) {
@@ -229,15 +42,38 @@ export async function loadCredentials(): Promise<Credentials> {
   }
 
   if (IS_WIN32) {
-    return hydrateWindowsDpapiCredentials(parsed.data);
+    const wasSealed = Boolean(parsed.data.dpapi_secrets);
+    const hydrated = hydrateWindowsDpapiCredentials(parsed.data);
+    cachedWindowsCredentials = { creds: structuredClone(hydrated), wasSealed };
+    return hydrated;
   }
 
-  // Optional: hydrate browser cookie/token from keychain for security.
   const { dpapi_secrets: _dpapi, ...creds } = parsed.data;
-  const hydrated = hydrateWorkspaces(creds.workspaces, {
-    getXoxc: (url) => keychainGet(`xoxc:${url}`, KEYCHAIN_SERVICE),
-    getXoxd: () => keychainGet("xoxd", KEYCHAIN_SERVICE),
-    getToken: (url) => keychainGet(`token:${url}`, KEYCHAIN_SERVICE),
+  const hydrated = creds.workspaces.map((w) => {
+    const url = normalizeWorkspaceUrl(w.workspace_url);
+    if (w.auth.auth_type === "browser") {
+      const xoxc = keychainGet(`xoxc:${url}`, KEYCHAIN_SERVICE);
+      const xoxd = keychainGet("xoxd", KEYCHAIN_SERVICE);
+      return {
+        ...w,
+        auth: {
+          auth_type: "browser" as const,
+          xoxc_token: xoxc ?? w.auth.xoxc_token,
+          xoxd_cookie: xoxd ?? w.auth.xoxd_cookie,
+        },
+      };
+    }
+    if (w.auth.auth_type === "standard") {
+      const token = keychainGet(`token:${url}`, KEYCHAIN_SERVICE);
+      return {
+        ...w,
+        auth: {
+          auth_type: "standard" as const,
+          token: token ?? w.auth.token,
+        },
+      };
+    }
+    return w;
   });
 
   return { ...creds, workspaces: hydrated };
@@ -254,17 +90,26 @@ export async function saveCredentials(credentials: Credentials): Promise<void> {
   };
 
   if (IS_WIN32) {
-    const sealed = sealWindowsDpapiCredentials(structuredClone(payload));
+    const wasSealed =
+      cachedWindowsCredentials?.wasSealed ??
+      Boolean(
+        CredentialsSchema.safeParse(await readJsonFile<unknown>(CREDENTIALS_FILE)).data
+          ?.dpapi_secrets,
+      );
+    const sealed = sealWindowsDpapiCredentials(structuredClone(payload), {
+      requireEncryption: wasSealed,
+    });
     await writeJsonFile(CREDENTIALS_FILE, sealed);
+    cachedWindowsCredentials = {
+      creds: structuredClone(payload),
+      wasSealed: Boolean(sealed.dpapi_secrets),
+    };
     return;
   }
 
-  // Store secrets in keychain when possible and avoid writing plaintext tokens to disk.
-  // If keychain writes fail (or non-macOS), fall back to storing secrets in the file.
   const { dpapi_secrets: _dpapi, ...filePayload }: Credentials = structuredClone(payload);
 
   if (IS_MACOS) {
-    // Browser auth: xoxd is shared across workspaces, xoxc is per-workspace.
     const firstBrowser = payload.workspaces.find((w) => w.auth.auth_type === "browser");
     let xoxdStored = false;
     if (
@@ -405,5 +250,3 @@ export async function resolveDefaultWorkspace(): Promise<Workspace | null> {
   }
   return creds.workspaces[0] ?? null;
 }
-
-// (reserved for future non-secret per-workspace metadata)

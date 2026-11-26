@@ -1,8 +1,8 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
+import { runWindowsPowerShell } from "./windows-dpapi.ts";
 
 export const DEFAULT_SLACK_STOP_TIMEOUT_MS = 5_000;
 const POLL_INTERVAL_MS = 200;
-const PS_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"];
 
 export type SlackProcessOps = {
   getRunningSlackPath: () => string | null;
@@ -13,20 +13,16 @@ export type SlackProcessOps = {
   now: () => number;
 };
 
-function runPowerShell(script: string): string {
-  return execFileSync("powershell", [...PS_ARGS, script], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5_000,
-  }).trim();
-}
+const CURRENT_SESSION_SLACK_EXPR =
+  "$sid = (Get-Process -Id $PID).SessionId; Get-Process -Name slack -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $sid }";
 
 function defaultGetRunningSlackPath(): string | null {
   try {
     return (
-      runPowerShell(
-        "(Get-Process -Name slack -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path)",
-      ) || null
+      runWindowsPowerShell({
+        script: `${CURRENT_SESSION_SLACK_EXPR} | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path`,
+        timeoutMs: DEFAULT_SLACK_STOP_TIMEOUT_MS,
+      }) || null
     );
   } catch {
     return null;
@@ -34,21 +30,22 @@ function defaultGetRunningSlackPath(): string | null {
 }
 
 function defaultIsSlackRunning(): boolean {
-  try {
-    return (
-      Number(runPowerShell("@(Get-Process -Name slack -ErrorAction SilentlyContinue).Count")) > 0
-    );
-  } catch {
-    return false;
+  const out = runWindowsPowerShell({
+    script: `@(${CURRENT_SESSION_SLACK_EXPR}).Count`,
+    timeoutMs: DEFAULT_SLACK_STOP_TIMEOUT_MS,
+  });
+  const count = Number(out);
+  if (!Number.isFinite(count)) {
+    throw new Error(`Unexpected PowerShell Slack process count: "${out}"`);
   }
+  return count > 0;
 }
 
 function defaultStopSlack(): void {
-  try {
-    runPowerShell("Stop-Process -Name slack -Force -ErrorAction SilentlyContinue");
-  } catch {
-    // ignore if already exited
-  }
+  runWindowsPowerShell({
+    script: `${CURRENT_SESSION_SLACK_EXPR} | Stop-Process -Force -ErrorAction SilentlyContinue`,
+    timeoutMs: DEFAULT_SLACK_STOP_TIMEOUT_MS,
+  });
 }
 
 function defaultStartSlack(exePath: string): void {
@@ -58,7 +55,7 @@ function defaultStartSlack(exePath: string): void {
     windowsHide: false,
   });
   child.on("error", () => {
-    // Best-effort relaunch: prevent unhandled async spawn errors (ENOENT/EACCES).
+    // Prevent unhandled async spawn errors (ENOENT/EACCES).
   });
   child.unref();
 }
@@ -73,14 +70,9 @@ const DEFAULT_OPS: SlackProcessOps = {
 };
 
 /**
- * Temporarily stops Slack Desktop on Windows while `work` extracts locked
- * Cookies/LevelDB files, then always relaunches Slack if it was running.
- *
- * Invariants:
- * 1. If Slack was not running, it is never launched.
- * 2. If Slack was running, `startSlack(exePath)` is always called in `finally`,
- *    even when stopping times out or `work()` throws.
- * 3. `work()` is only invoked after Slack exits (or fails fast on stop timeout).
+ * Temporarily force-stops Slack Desktop in the current Windows user session
+ * while `work` extracts locked Cookies/LevelDB files, then relaunches Slack
+ * if it was running.
  */
 export async function withWindowsSlackStopped<T>(
   work: () => Promise<T>,
@@ -93,7 +85,6 @@ export async function withWindowsSlackStopped<T>(
     return await work();
   }
 
-  let stopped = false;
   try {
     ops.stopSlack();
     const deadline = ops.now() + stopTimeoutMs;
@@ -105,14 +96,12 @@ export async function withWindowsSlackStopped<T>(
       }
       await ops.sleep(POLL_INTERVAL_MS);
     }
-    stopped = true;
     return await work();
   } finally {
     try {
       ops.startSlack(exePath);
     } catch {
-      // Best-effort relaunch; never mask the primary result/error.
-      void stopped;
+      // Best-effort relaunch; never mask the primary result or error.
     }
   }
 }

@@ -16,6 +16,7 @@ import {
   sealWindowsDpapiCredentials,
   type DpapiStoreOps,
 } from "../src/auth/store.ts";
+import { dpapiProtect, dpapiUnprotect } from "../src/auth/windows-dpapi.ts";
 import type { Credentials } from "../src/auth/schema.ts";
 
 describe("Windows Firefox profile discovery", () => {
@@ -26,7 +27,7 @@ describe("Windows Firefox profile discovery", () => {
         env: { APPDATA: "C:\\Users\\alice\\AppData\\Roaming" },
         home: "C:\\Users\\alice",
       }),
-    ).toContain("Mozilla");
+    ).toBe("C:\\Users\\alice\\AppData\\Roaming\\Mozilla\\Firefox");
 
     expect(
       getFirefoxBaseDir({
@@ -34,7 +35,7 @@ describe("Windows Firefox profile discovery", () => {
         env: {},
         home: "C:\\Users\\alice",
       }),
-    ).toContain("Roaming");
+    ).toBe("C:\\Users\\alice\\AppData\\Roaming\\Mozilla\\Firefox");
 
     expect(getFirefoxBaseDir({ platform: "darwin", env: {}, home: "/Users/alice" })).toBe(
       "/Users/alice/Library/Application Support/Firefox",
@@ -60,12 +61,12 @@ describe("Windows Firefox profile discovery", () => {
 });
 
 describe("Draft editor browser launch command", () => {
-  test("uses rundll32 on Windows, open on macOS, xdg-open on Linux", () => {
+  test("uses System32 rundll32.exe on Windows, open on macOS, xdg-open on Linux", () => {
     const url = "http://127.0.0.1:4321/?t=abc&foo=bar";
-    expect(getBrowserLaunchCommand(url, "win32")).toEqual({
-      command: "rundll32",
-      args: ["url.dll,FileProtocolHandler", url],
-    });
+    const winCmd = getBrowserLaunchCommand(url, "win32");
+    expect(winCmd.command.toLowerCase()).toEndWith("\\system32\\rundll32.exe");
+    expect(winCmd.args).toEqual(["url.dll,FileProtocolHandler", url]);
+
     expect(getBrowserLaunchCommand(url, "darwin")).toEqual({
       command: "open",
       args: [url],
@@ -90,7 +91,7 @@ describe("Windows self-update behavior", () => {
     ).toBe("binary");
   });
 
-  test("defers .bak cleanup on Windows EPERM without rolling back", async () => {
+  test("stages new binary first and defers .bak cleanup on Windows EPERM without rolling back", async () => {
     const calls: string[] = [];
     const ops: ReplaceBinaryOps = {
       rename: async (src, dest) => {
@@ -102,8 +103,8 @@ describe("Windows self-update behavior", () => {
       chmod: async () => {
         calls.push("chmod");
       },
-      rm: async () => {
-        calls.push("rm");
+      rm: async (p) => {
+        calls.push(`rm:${p}`);
         const err = new Error("EPERM: resource busy or locked") as NodeJS.ErrnoException;
         err.code = "EPERM";
         throw err;
@@ -119,13 +120,14 @@ describe("Windows self-update behavior", () => {
 
     expect(result).toEqual({ backupCleanupDeferred: true });
     expect(calls).toEqual([
+      "copy:C:\\tmp\\new.exe->C:\\bin\\agent-slack.exe.new",
       "rename:C:\\bin\\agent-slack.exe->C:\\bin\\agent-slack.exe.bak",
-      "copy:C:\\tmp\\new.exe->C:\\bin\\agent-slack.exe",
-      "rm",
+      "rename:C:\\bin\\agent-slack.exe.new->C:\\bin\\agent-slack.exe",
+      "rm:C:\\bin\\agent-slack.exe.bak",
     ]);
   });
 
-  test("restores backup if copyFile fails", async () => {
+  test("leaves live binary untouched if staging copyFile fails", async () => {
     const calls: string[] = [];
     const ops: ReplaceBinaryOps = {
       rename: async (src, dest) => {
@@ -138,8 +140,8 @@ describe("Windows self-update behavior", () => {
       chmod: async () => {
         calls.push("chmod");
       },
-      rm: async () => {
-        calls.push("rm");
+      rm: async (p) => {
+        calls.push(`rm:${p}`);
       },
     };
 
@@ -152,11 +154,29 @@ describe("Windows self-update behavior", () => {
       }),
     ).rejects.toThrow("disk full");
 
-    expect(calls).toEqual([
-      "rename:/bin/agent-slack->/bin/agent-slack.bak",
-      "copy:fail",
-      "rename:/bin/agent-slack.bak->/bin/agent-slack",
-    ]);
+    expect(calls).toEqual(["copy:fail"]);
+  });
+
+  test("surfaces recovery path when both staged rename and backup restore fail", async () => {
+    const ops: ReplaceBinaryOps = {
+      copyFile: async () => {},
+      chmod: async () => {},
+      rm: async () => {},
+      rename: async (src) => {
+        if (src === "/bin/agent-slack.new" || src === "/bin/agent-slack.bak") {
+          throw new Error("rename failed");
+        }
+      },
+    };
+
+    await expect(
+      replaceBinaryFile({
+        sourcePath: "/tmp/new",
+        targetPath: "/bin/agent-slack",
+        platform: "win32",
+        ops,
+      }),
+    ).rejects.toThrow('recover manually from "/bin/agent-slack.bak"');
   });
 });
 
@@ -320,7 +340,7 @@ describe("Windows DPAPI batched credential store", () => {
       },
     };
 
-    const sealed = sealWindowsDpapiCredentials(sampleCreds, fakeOps);
+    const sealed = sealWindowsDpapiCredentials(sampleCreds, { ops: fakeOps });
     expect(protectCalls).toBe(1);
     expect(sealed.dpapi_secrets).toBeTruthy();
     expect(JSON.stringify(sealed)).not.toContain("xoxc-secret-1");
@@ -335,31 +355,37 @@ describe("Windows DPAPI batched credential store", () => {
     expect(hydrated.workspaces).toEqual(sampleCreds.workspaces);
   });
 
-  test("fails closed on transient DPAPI decrypt failure to prevent overwriting encrypted secrets", () => {
+  test("fails closed on transient decrypt error, missing envelope, partial bag, or downgrade of previously sealed store", () => {
     const workingOps: DpapiStoreOps = {
       protect: (buf) => Buffer.concat([Buffer.from("ENC:"), buf]),
       unprotect: (buf) => buf.subarray(4),
     };
-    const sealed = sealWindowsDpapiCredentials(sampleCreds, workingOps);
+    const sealed = sealWindowsDpapiCredentials(sampleCreds, { ops: workingOps });
 
-    const failingDecryptOps: DpapiStoreOps = {
+    const failingOps: DpapiStoreOps = {
       protect: () => {
-        throw new Error("should not be called");
+        throw new Error("PowerShell timed out");
       },
       unprotect: () => {
         throw new Error("PowerShell timed out");
       },
     };
 
-    expect(() => hydrateWindowsDpapiCredentials(sealed, failingDecryptOps)).toThrow(
+    expect(() => hydrateWindowsDpapiCredentials(sealed, failingOps)).toThrow(
       "Failed to decrypt Windows DPAPI credentials",
     );
-    expect(() => sealWindowsDpapiCredentials(sealed, workingOps)).toThrow(
-      "Refusing to save credentials containing unhydrated Windows DPAPI placeholders",
+    expect(() =>
+      hydrateWindowsDpapiCredentials({ ...sealed, dpapi_secrets: undefined }, workingOps),
+    ).toThrow("no encrypted envelope");
+    expect(() => sealWindowsDpapiCredentials(sealed, { ops: workingOps })).toThrow(
+      "unhydrated Windows DPAPI placeholders",
     );
+    expect(() =>
+      sealWindowsDpapiCredentials(sampleCreds, { ops: failingOps, requireEncryption: true }),
+    ).toThrow("refusing to downgrade to plaintext");
   });
 
-  test("loads legacy plaintext credentials with zero DPAPI calls and falls back on protect error", () => {
+  test("loads legacy plaintext credentials with zero DPAPI calls and falls back on initial protect error", () => {
     let unprotectCalls = 0;
     const failingOps: DpapiStoreOps = {
       protect: () => {
@@ -375,8 +401,27 @@ describe("Windows DPAPI batched credential store", () => {
     expect(unprotectCalls).toBe(0);
     expect(loaded.workspaces).toEqual(sampleCreds.workspaces);
 
-    const fallback = sealWindowsDpapiCredentials(sampleCreds, failingOps);
+    const fallback = sealWindowsDpapiCredentials(sampleCreds, {
+      ops: failingOps,
+      requireEncryption: false,
+    });
     expect(fallback.dpapi_secrets).toBeUndefined();
     expect(fallback.workspaces).toEqual(sampleCreds.workspaces);
   });
+
+  test.skipIf(process.platform !== "win32")(
+    "round-trips real Windows CurrentUser DPAPI encryption",
+    () => {
+      const probe = Buffer.from("agent-slack-dpapi-smoke", "utf8");
+      const enc = dpapiProtect(probe);
+      expect(enc.equals(probe)).toBe(false);
+      expect(dpapiUnprotect(enc).toString("utf8")).toBe("agent-slack-dpapi-smoke");
+
+      const sealed = sealWindowsDpapiCredentials(sampleCreds, { requireEncryption: true });
+      expect(sealed.dpapi_secrets).toBeTruthy();
+      expect(JSON.stringify(sealed)).not.toContain("xoxc-secret-1");
+      const hydrated = hydrateWindowsDpapiCredentials(sealed);
+      expect(hydrated.workspaces).toEqual(sampleCreds.workspaces);
+    },
+  );
 });

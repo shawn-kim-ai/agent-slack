@@ -17,58 +17,60 @@ Exit 0 means every state-space cell and control assertion passed.
 
 ### 1. Self-Update Binary Safety (`src/lib/update.ts`: `replaceBinaryFile`)
 
-- **Harm if broken**: Windows `EPERM` on `.bak` deletion triggers a rollback or leaves `agent-slack.exe` missing.
+- **Harm if broken**: Windows `EPERM` on `.bak` deletion triggers a rollback or a failed copy leaves `agent-slack.exe` missing.
 - **Invariants**:
-  - `BinaryAlwaysPresent`: After completion or failure, target always holds either `OLD` or `NEW` (never missing).
-  - `WindowsDeferredBackupNoRollback`: On `win32`, `rm(.bak)` `EPERM` after `copyFile` succeeds with `backupCleanupDeferred=true` and target=`NEW`.
-  - `RollbackRestoresOld`: Any `copyFile` failure restores `OLD` via `rename(.bak -> target)`.
-- **Bounds**: Exhaustive over `platform ∈ {win32, linux} × renameOk × copyOk × chmodOk × rmOk` (32 states).
+  - `BinaryAlwaysPresent`: Staging (`target.new`) happens before touching the live binary; after completion or failure, target holds `OLD` or `NEW` (and on double rename failure, surfaces recovery path `target.bak`).
+  - `WindowsDeferredBackupNoRollback`: On `win32`, `rm(.bak)` `EPERM` after atomic rename succeeds with `backupCleanupDeferred=true` and target=`NEW`.
+  - `LinuxChmodFailKeepsOld`: On `linux`, `chmod` failure cleans up `target.new` and leaves `OLD` untouched.
+- **Bounds**: Exhaustive over `platform ∈ {win32, linux} × copyOk × chmodOk × backupRenameOk × stagedRenameOk × rmOk` (64 states).
 
 ```mermaid
 stateDiagram-v2
-    [*] --> RenamedToBak: rename(target -> target.bak)
-    [*] --> FailedIntact: rename fails (target=OLD)
-    RenamedToBak --> CopiedNew: copyFile(src -> target)
-    RenamedToBak --> RestoredOld: copyFile fails -> rename(.bak -> target)
-    CopiedNew --> UpdatedClean: rm(.bak) succeeds
-    CopiedNew --> UpdatedDeferred: win32 & rm(.bak) EPERM (cleanup on next run)
-    CopiedNew --> FailedAfterCopy: non-win32 & rm(.bak) fails
+    [*] --> Staged: copyFile(src -> target.new) + chmod(non-win32)
+    [*] --> FailedIntact: staging fails (target=OLD untouched)
+    Staged --> BackedUp: rename(target -> target.bak)
+    BackedUp --> Swapped: rename(target.new -> target)
+    BackedUp --> RestoredOld: staged rename fails -> rename(.bak -> target)
+    Swapped --> UpdatedClean: rm(.bak) succeeds
+    Swapped --> UpdatedDeferred: win32 & rm(.bak) EPERM (cleaned on next run)
 ```
 
-### 2. DPAPI Credential Store & Auth Fallback (`src/auth/store.ts`, `src/auth/firefox-profile.ts`)
+### 2. DPAPI Credential Store & Auth Fallback (`src/auth/windows-credential-store.ts`, `src/auth/firefox-profile.ts`)
 
-- **Harm if broken**: Plaintext token leaks on NTFS, token loss during DPAPI failure, O(N) PowerShell latency per CLI call, or unhandled crash on Windows auth fallback.
+- **Harm if broken**: Plaintext downgrade of encrypted credentials on transient timeout, token loss, partial-bag placeholder leaks, or unhandled crash on Windows auth fallback.
 - **Invariants**:
   - `MaxOneDpapiCall`: ≤ 1 `protect` per save and ≤ 1 `unprotect` per load (0 for plaintext).
   - `NoPlaintextLeak`: Sealed JSON never contains raw `xoxc-`/`xoxd-`/`xoxb-` when DPAPI succeeds.
-  - `NoTokenLoss`: Round-trip preserves all workspace credentials even when DPAPI fails (falls back to plaintext).
-  - `NoPlatformCrash`: `getFirefoxBaseDir` never throws on any `NodeJS.Platform`.
-- **Bounds**: Exhaustive over `dataset ∈ {empty, browserOnly, standardOnly, mixed} × dpapiOk ∈ {T, F}` (8 states) + 5 platforms.
+  - `FailClosedOnTransientDecryptError` & `FailClosedOnPartialBag`: Missing/unreadable/incomplete envelope fails closed with recovery hint instead of returning `__DPAPI__` placeholders.
+  - `NoSilentPlaintextDowngrade`: Previously sealed files refuse plaintext downgrade on transient `protect` failure.
+  - `ExpectedPlatformPaths`: `getFirefoxBaseDir` returns exact platform-native paths and `null` (never throws) on unsupported platforms.
+- **Bounds**: Exhaustive over `dataset × dpapiOk` + failure injections + 4 platform path assertions.
 
 ```mermaid
 stateDiagram-v2
     [*] --> PlaintextLoaded: no dpapi_secrets (0 DPAPI calls)
     [*] --> SealedLoaded: has dpapi_secrets
-    SealedLoaded --> Hydrated: 1x unprotect succeeds (dpapi_secrets stripped)
-    SealedLoaded --> FallbackUnmodified: unprotect fails (no crash)
+    SealedLoaded --> Hydrated: 1x unprotect + all placeholders resolved
+    SealedLoaded --> FailClosedError: unprotect fails or partial bag (throws with recovery path)
     PlaintextLoaded --> SealedOnDisk: save on win32 & 1x protect succeeds
-    PlaintextLoaded --> PlaintextOnDisk: save on win32 & protect fails (no token loss)
+    PlaintextLoaded --> PlaintextWarn: first-time save & protect fails (stderr warning)
+    Hydrated --> FailClosedSave: previously sealed & protect fails (refuses downgrade)
 ```
 
 ### 3. `--restart-slack` Lifecycle (`src/auth/windows-slack-process.ts`: `withWindowsSlackStopped`)
 
-- **Harm if broken**: Extraction kills user's Slack and fails to relaunch it on error, or launches Slack when the user wasn't running it, or attempts locked DB read after timeout.
+- **Harm if broken**: Extraction kills user's Slack and fails to relaunch it on error, launches Slack when not running, or extracts while still locked.
 - **Invariants**:
-  - `NeverStartIfNotRunning`: When Slack is not running, `stopSlack` and `startSlack` are never invoked.
-  - `AlwaysRelaunchIfRunning`: When Slack was running, `startSlack(exePath)` is invoked exactly once in `finally` regardless of stop timeout or extraction error.
-  - `NoWorkWhileLocked`: On stop timeout (5s default), `work()` is never invoked.
+  - `NeverStartIfNotRunning`: When Slack is not running, exact trace is `work`.
+  - `ExactOrderAndExePath`: When running and stopped within 5s, exact trace is `stop -> work -> start(exePath)` even if `work` throws.
+  - `NoWorkWhileLocked`: On 5s stop timeout, exact trace is `stop -> start(exePath)` (`work` never runs).
 - **Bounds**: Exhaustive over `initiallyRunning × stopMode(3) × workMode(2) × startMode(2)` (24 states).
 
 ```mermaid
 stateDiagram-v2
     [*] --> DirectWork: not running
     DirectWork --> [*]: done (never launched)
-    [*] --> Stopping: running (exePath captured)
+    [*] --> Stopping: running (exePath captured in current session)
     Stopping --> Extracting: exited within 5s
     Stopping --> Relaunching: timeout 5s (skip work)
     Extracting --> Relaunching: work ok or throws

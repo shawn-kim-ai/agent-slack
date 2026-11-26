@@ -26,8 +26,8 @@ This document captures the architecture, trade-offs, and phased implementation p
   - Replace temporary key files in `tmpdir()` with PowerShell stdin/stdout base64 transport (`-NoProfile -NonInteractive -ExecutionPolicy Bypass` + timeout). Decrypted AES keys never touch disk.
   - Electron `safeStorage` on Windows continues to use DPAPI (`Local State` → `os_crypt.encrypted_key`), so Slack Desktop extraction remains reliable.
 - **Locked Cookies DB handling**:
-  - When Slack Desktop holds an exclusive lock on `Network/Cookies` (`EBUSY` / `EPERM` / `EACCES`), emit a clear message instructing the user to fully quit Slack (including the system tray icon) or re-run with `--restart-slack`.
-  - Provide an opt-in `--restart-slack` flag on `agent-slack auth import-desktop` (Windows only): captures the running Slack executable path via PowerShell, gracefully stops Slack, extracts credentials, and relaunches Slack in a `finally` block.
+  - When Slack Desktop holds an exclusive lock on `Network/Cookies` (`EBUSY` / `EPERM` / `EACCES`), emit a clear message instructing the user to fully quit Slack (including the system tray icon) or re-run with `--restart-slack`. Copies `-wal`/`-shm`/`-journal` SQLite sidecars alongside `Cookies`.
+  - Provide an opt-in `--restart-slack` flag on `agent-slack auth import-desktop` (Windows only): captures the running Slack executable path in the current Windows user session via PowerShell, force-stops Slack (`Stop-Process -Force`), waits up to 5s for exit, extracts credentials, and relaunches Slack in a `finally` block.
 
 ### 1.3 Draft Editor Browser Launch (`src/cli/draft-server.ts`)
 

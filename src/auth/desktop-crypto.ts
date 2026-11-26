@@ -10,7 +10,7 @@ import {
   type KeychainOptions,
   type KeychainQuery,
 } from "./keychain.ts";
-import { dpapiUnprotect } from "./windows-dpapi.ts";
+import { DEFAULT_DPAPI_TIMEOUT_MS, dpapiUnprotect } from "./windows-dpapi.ts";
 
 const IS_MACOS = process.platform === "darwin";
 const IS_LINUX = process.platform === "linux";
@@ -104,11 +104,13 @@ export function decryptCookieWindows(encrypted: Buffer, slackDataDir: string): s
     throw new Error("No os_crypt.encrypted_key in Local State");
   }
   const encKeyFull = Buffer.from(osCrypt.encrypted_key as string, "base64");
-  // Skip "DPAPI" prefix (5 bytes)
+  if (encKeyFull.subarray(0, 5).toString("utf8") !== "DPAPI") {
+    throw new Error("Unsupported os_crypt.encrypted_key format (expected DPAPI prefix)");
+  }
   const encKeyBlob = encKeyFull.subarray(5);
 
-  // Decrypt AES key via Windows DPAPI over stdin/stdout (no temp files on disk)
-  const aesKey = dpapiUnprotect(encKeyBlob, { timeoutMs: getKeychainTimeoutMs() });
+  const timeoutMs = Math.max(DEFAULT_DPAPI_TIMEOUT_MS, getKeychainTimeoutMs());
+  const aesKey = dpapiUnprotect(encKeyBlob, { timeoutMs });
 
   // AES-256-GCM: v10(3) + nonce(12) + ciphertext(N-16) + tag(16)
   const nonce = encrypted.subarray(3, 15);

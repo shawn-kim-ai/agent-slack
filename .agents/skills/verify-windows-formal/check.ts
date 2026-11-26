@@ -32,88 +32,93 @@ async function verifySelfUpdateMatrix(): Promise<void> {
   let reachedDeferred = false;
 
   for (const platform of platforms) {
-    for (const renameOk of bools) {
-      for (const copyOk of bools) {
-        for (const chmodOk of bools) {
-          for (const rmOk of bools) {
-            cells += 1;
-            const fsState = new Map<string, string>([
-              ["/bin/app", "OLD"],
-              ["/tmp/new", "NEW"],
-            ]);
-            const ops: ReplaceBinaryOps = {
-              rename: async (src, dest) => {
-                if (src === "/bin/app" && !renameOk) {
-                  throw new Error("rename failed");
-                }
-                const val = fsState.get(src);
-                if (!val) {
-                  throw new Error(`missing ${src}`);
-                }
-                fsState.set(dest, val);
-                fsState.delete(src);
-              },
-              copyFile: async (src, dest) => {
-                if (!copyOk) {
-                  throw new Error("copy failed");
-                }
-                const val = fsState.get(src);
-                if (!val) {
-                  throw new Error(`missing ${src}`);
-                }
-                fsState.set(dest, val);
-              },
-              chmod: async () => {
-                if (!chmodOk) {
-                  throw new Error("chmod failed");
-                }
-              },
-              rm: async (p) => {
-                if (!rmOk) {
-                  const err = new Error("EPERM") as NodeJS.ErrnoException;
-                  err.code = "EPERM";
-                  throw err;
-                }
-                fsState.delete(p);
-              },
-            };
+    for (const copyOk of bools) {
+      for (const chmodOk of bools) {
+        for (const backupRenameOk of bools) {
+          for (const stagedRenameOk of bools) {
+            for (const rmOk of bools) {
+              cells += 1;
+              const fsState = new Map<string, string>([
+                ["/bin/app", "OLD"],
+                ["/tmp/new", "NEW"],
+              ]);
+              const ops: ReplaceBinaryOps = {
+                copyFile: async (src, dest) => {
+                  if (!copyOk) {
+                    throw new Error("copy failed");
+                  }
+                  fsState.set(dest, fsState.get(src)!);
+                },
+                chmod: async () => {
+                  if (!chmodOk) {
+                    throw new Error("chmod failed");
+                  }
+                },
+                rename: async (src, dest) => {
+                  if (src === "/bin/app" && !backupRenameOk) {
+                    throw new Error("backup rename failed");
+                  }
+                  if (src === "/bin/app.new" && !stagedRenameOk) {
+                    throw new Error("staged rename failed");
+                  }
+                  const val = fsState.get(src);
+                  if (!val) {
+                    throw new Error(`missing ${src}`);
+                  }
+                  fsState.set(dest, val);
+                  fsState.delete(src);
+                },
+                rm: async (p) => {
+                  if (p === "/bin/app.bak" && !rmOk) {
+                    const err = new Error("EPERM") as NodeJS.ErrnoException;
+                    err.code = "EPERM";
+                    throw err;
+                  }
+                  fsState.delete(p);
+                },
+              };
 
-            let threw = false;
-            let deferred = false;
-            try {
-              const res = await replaceBinaryFile({
-                sourcePath: "/tmp/new",
-                targetPath: "/bin/app",
-                platform,
-                ops,
-              });
-              deferred = res.backupCleanupDeferred;
-            } catch {
-              threw = true;
-            }
+              let threw = false;
+              let deferred = false;
+              try {
+                const res = await replaceBinaryFile({
+                  sourcePath: "/tmp/new",
+                  targetPath: "/bin/app",
+                  platform,
+                  ops,
+                });
+                deferred = res.backupCleanupDeferred;
+              } catch {
+                threw = true;
+              }
 
-            const finalBin = fsState.get("/bin/app");
-            const label = `self-update(${platform},ren=${renameOk},cp=${copyOk},ch=${chmodOk},rm=${rmOk})`;
+              const finalBin = fsState.get("/bin/app");
+              const label = `self-update(${platform},cp=${copyOk},ch=${chmodOk},bk=${backupRenameOk},st=${stagedRenameOk},rm=${rmOk})`;
 
-            assert(
-              finalBin === "OLD" || finalBin === "NEW",
-              `${label}:BinaryAlwaysPresent finalBin=${String(finalBin)}`,
-            );
-
-            if (platform === "win32" && renameOk && copyOk && !rmOk) {
               assert(
-                !threw && deferred && finalBin === "NEW",
-                `${label}:WinDeferred threw=${threw},deferred=${deferred},final=${String(finalBin)}`,
+                finalBin === "OLD" || finalBin === "NEW",
+                `${label}:BinaryAlwaysPresent finalBin=${String(finalBin)}`,
               );
-              reachedDeferred = true;
-            }
 
-            if (renameOk && !copyOk) {
-              assert(
-                threw && finalBin === "OLD",
-                `${label}:RollbackRestoresOld threw=${threw},final=${String(finalBin)}`,
-              );
-              reachedRollback = true;
+              if (platform === "linux" && copyOk && !chmodOk) {
+                assert(threw && finalBin === "OLD", `${label}:LinuxChmodFailKeepsOld`);
+              }
+
+              const swapped =
+                copyOk && (platform === "win32" || chmodOk) && backupRenameOk && stagedRenameOk;
+              if (platform === "win32" && swapped && !rmOk) {
+                assert(!threw && deferred && finalBin === "NEW", `${label}:WinDeferred`);
+                reachedDeferred = true;
+              }
+              if (
+                copyOk &&
+                (platform === "win32" || chmodOk) &&
+                backupRenameOk &&
+                !stagedRenameOk
+              ) {
+                assert(threw && finalBin === "OLD", `${label}:StagedRenameRollbackRestoresOld`);
+                reachedRollback = true;
+              }
             }
           }
         }
@@ -121,10 +126,7 @@ async function verifySelfUpdateMatrix(): Promise<void> {
     }
   }
 
-  assert(
-    reachedRollback && reachedDeferred,
-    `self-update:Controls rollback=${reachedRollback},deferred=${reachedDeferred}`,
-  );
+  assert(reachedRollback && reachedDeferred, "self-update:Controls");
   console.log(`PASS self-update state machine: ${cells} states verified`);
 }
 
@@ -132,40 +134,18 @@ function verifyDpapiAndFallbackMatrix(): void {
   const datasets: { name: string; creds: Credentials; hasSecrets: boolean }[] = [
     { name: "empty", creds: { version: 1, workspaces: [] }, hasSecrets: false },
     {
-      name: "browserOnly",
+      name: "multiBrowserAndStandard",
       hasSecrets: true,
       creds: {
         version: 1,
         workspaces: [
           {
             workspace_url: "https://a.slack.com",
-            auth: { auth_type: "browser", xoxc_token: "xoxc-1", xoxd_cookie: "xoxd-1" },
+            auth: { auth_type: "browser", xoxc_token: "xoxc-1", xoxd_cookie: "xoxd-a" },
           },
-        ],
-      },
-    },
-    {
-      name: "standardOnly",
-      hasSecrets: true,
-      creds: {
-        version: 1,
-        workspaces: [
           {
-            workspace_url: "https://b.slack.com",
-            auth: { auth_type: "standard", token: "xoxb-2" },
-          },
-        ],
-      },
-    },
-    {
-      name: "mixed",
-      hasSecrets: true,
-      creds: {
-        version: 1,
-        workspaces: [
-          {
-            workspace_url: "https://a.slack.com",
-            auth: { auth_type: "browser", xoxc_token: "xoxc-1", xoxd_cookie: "xoxd-1" },
+            workspace_url: "https://c.slack.com",
+            auth: { auth_type: "browser", xoxc_token: "xoxc-3", xoxd_cookie: "xoxd-c" },
           },
           {
             workspace_url: "https://b.slack.com",
@@ -199,31 +179,39 @@ function verifyDpapiAndFallbackMatrix(): void {
         },
       };
 
-      const sealed = sealWindowsDpapiCredentials(ds.creds, ops);
+      const sealed = sealWindowsDpapiCredentials(ds.creds, { ops, requireEncryption: false });
       const label = `dpapi(${ds.name},ok=${dpapiOk})`;
 
-      assert(protectCalls <= 1, `${label}:MaxOneProtect protectCalls=${protectCalls}`);
+      assert(protectCalls <= 1, `${label}:MaxOneProtect`);
 
       if (dpapiOk && ds.hasSecrets) {
         const serialized = JSON.stringify(sealed);
+        assert(Boolean(sealed.dpapi_secrets), `${label}:EnvelopePresent`);
         assert(
           !serialized.includes("xoxc-1") &&
-            !serialized.includes("xoxd-1") &&
+            !serialized.includes("xoxd-a") &&
+            !serialized.includes("xoxd-c") &&
             !serialized.includes("xoxb-2"),
           `${label}:NoPlaintextLeak`,
         );
-      }
 
-      const hydrated = hydrateWindowsDpapiCredentials(sealed, ops);
-      assert(unprotectCalls <= 1, `${label}:MaxOneUnprotect unprotectCalls=${unprotectCalls}`);
-      assert(hydrated.dpapi_secrets === undefined, `${label}:StripsCiphertext`);
-      assert(
-        JSON.stringify(hydrated.workspaces) === JSON.stringify(ds.creds.workspaces),
-        `${label}:NoTokenLoss`,
-      );
+        let downgradeBlocked = false;
+        try {
+          sealWindowsDpapiCredentials(ds.creds, {
+            ops: {
+              protect: () => {
+                throw new Error("timeout");
+              },
+              unprotect: ops.unprotect,
+            },
+            requireEncryption: true,
+          });
+        } catch {
+          downgradeBlocked = true;
+        }
+        assert(downgradeBlocked, `${label}:NoSilentPlaintextDowngrade`);
 
-      if (dpapiOk && ds.hasSecrets) {
-        let failedClosed = false;
+        let decryptFailedClosed = false;
         try {
           hydrateWindowsDpapiCredentials(sealed, {
             protect: ops.protect,
@@ -232,24 +220,56 @@ function verifyDpapiAndFallbackMatrix(): void {
             },
           });
         } catch {
-          failedClosed = true;
+          decryptFailedClosed = true;
         }
-        assert(failedClosed, `${label}:FailClosedOnTransientDecryptError`);
+        assert(decryptFailedClosed, `${label}:FailClosedOnTransientDecryptError`);
+
+        let partialBagFailedClosed = false;
+        try {
+          hydrateWindowsDpapiCredentials(sealed, {
+            protect: ops.protect,
+            unprotect: () =>
+              Buffer.from(JSON.stringify({ xoxc: {}, xoxd_by_workspace: {}, token: {} })),
+          });
+        } catch {
+          partialBagFailedClosed = true;
+        }
+        assert(partialBagFailedClosed, `${label}:FailClosedOnPartialBag`);
       }
+
+      const hydrated = hydrateWindowsDpapiCredentials(sealed, ops);
+      assert(unprotectCalls <= 1, `${label}:MaxOneUnprotect`);
+      assert(hydrated.dpapi_secrets === undefined, `${label}:StripsCiphertext`);
+      assert(
+        JSON.stringify(hydrated.workspaces) === JSON.stringify(ds.creds.workspaces),
+        `${label}:NoTokenLoss`,
+      );
     }
   }
 
-  for (const p of ["darwin", "linux", "win32", "freebsd", "sunos"] as NodeJS.Platform[]) {
-    let threw = false;
-    try {
-      getFirefoxBaseDir({ platform: p, env: { APPDATA: "C:\\AppData" }, home: "/home/u" });
-    } catch {
-      threw = true;
-    }
-    assert(!threw, `firefox-base-dir(${p}):NoThrow`);
-  }
+  assert(
+    getFirefoxBaseDir({ platform: "win32", env: { APPDATA: "C:\\AppData" }, home: "C:\\u" }) ===
+      "C:\\AppData\\Mozilla\\Firefox",
+    "firefox-base-dir(win32):ExpectedPath",
+  );
+  assert(
+    getFirefoxBaseDir({ platform: "darwin", env: {}, home: "/Users/u" }) ===
+      "/Users/u/Library/Application Support/Firefox",
+    "firefox-base-dir(darwin):ExpectedPath",
+  );
+  assert(
+    getFirefoxBaseDir({ platform: "linux", env: {}, home: "/home/u" }) ===
+      "/home/u/.mozilla/firefox",
+    "firefox-base-dir(linux):ExpectedPath",
+  );
+  assert(
+    getFirefoxBaseDir({ platform: "freebsd", env: {}, home: "/home/u" }) === null,
+    "firefox-base-dir(freebsd):NullWithoutThrow",
+  );
 
-  console.log(`PASS DPAPI credential store & fallback: ${cells} states + 5 platforms verified`);
+  console.log(
+    `PASS DPAPI credential store & fallback: ${cells} states + 4 platform assertions verified`,
+  );
 }
 
 async function verifyRestartSlackMatrix(): Promise<void> {
@@ -263,16 +283,15 @@ async function verifyRestartSlackMatrix(): Promise<void> {
       for (const workMode of workModes) {
         for (const startMode of startModes) {
           cells += 1;
-          let stopCalls = 0;
-          let startCalls = 0;
-          let workCalls = 0;
+          const trace: string[] = [];
           let pollCount = 0;
           let clock = 0;
+          const slackExe = "C:\\slack\\slack.exe";
 
           const ops: SlackProcessOps = {
-            getRunningSlackPath: () => (initiallyRunning ? "C:\\slack\\slack.exe" : null),
+            getRunningSlackPath: () => (initiallyRunning ? slackExe : null),
             stopSlack: () => {
-              stopCalls += 1;
+              trace.push("stop");
             },
             isSlackRunning: () => {
               pollCount += 1;
@@ -284,8 +303,8 @@ async function verifyRestartSlackMatrix(): Promise<void> {
               }
               return true;
             },
-            startSlack: () => {
-              startCalls += 1;
+            startSlack: (exe) => {
+              trace.push(`start:${exe}`);
               if (startMode === "throws") {
                 throw new Error("spawn failed");
               }
@@ -300,7 +319,7 @@ async function verifyRestartSlackMatrix(): Promise<void> {
           try {
             await withWindowsSlackStopped(
               async () => {
-                workCalls += 1;
+                trace.push("work");
                 if (workMode === "throws") {
                   throw new Error("work failed");
                 }
@@ -316,22 +335,20 @@ async function verifyRestartSlackMatrix(): Promise<void> {
 
           if (!initiallyRunning) {
             assert(
-              stopCalls === 0 && startCalls === 0 && workCalls === 1,
-              `${label}:NeverStartIfNotRunning stop=${stopCalls},start=${startCalls},work=${workCalls}`,
+              trace.join(",") === "work",
+              `${label}:NeverStartIfNotRunning trace=${trace.join(",")}`,
+            );
+          } else if (stopMode === "timeout") {
+            assert(
+              threw && trace.join(",") === `stop,start:${slackExe}`,
+              `${label}:NoWorkWhileLocked trace=${trace.join(",")}`,
             );
           } else {
             assert(
-              stopCalls === 1 && startCalls === 1,
-              `${label}:AlwaysRelaunchIfRunning stop=${stopCalls},start=${startCalls}`,
+              threw === (workMode === "throws") &&
+                trace.join(",") === `stop,work,start:${slackExe}`,
+              `${label}:ExactOrderAndExePath trace=${trace.join(",")}`,
             );
-            if (stopMode === "timeout") {
-              assert(workCalls === 0 && threw, `${label}:NoWorkWhileLocked`);
-            } else {
-              assert(
-                workCalls === 1 && threw === (workMode === "throws"),
-                `${label}:WorkExecutedOnce`,
-              );
-            }
           }
         }
       }
