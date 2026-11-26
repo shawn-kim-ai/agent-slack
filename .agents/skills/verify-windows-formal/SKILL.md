@@ -8,7 +8,13 @@ description: "Exhaustively verify Windows self-update binary safety, DPAPI crede
 ## Run it
 
 ```bash
+# Executable state-space verifier (real TypeScript functions)
 bun .agents/skills/verify-windows-formal/check.ts
+
+# TLA+ TLC model checker (requires tlc / tla2tools.jar + Java)
+for spec in SelfUpdate DpapiStore RestartSlack; do
+  tlc -cleanup -config ".agents/skills/verify-windows-formal/tla/$spec.cfg" ".agents/skills/verify-windows-formal/tla/$spec.tla"
+done
 ```
 
 Exit 0 means every state-space cell and control assertion passed.
