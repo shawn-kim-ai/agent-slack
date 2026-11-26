@@ -23,6 +23,7 @@ const DEFAULT_DPAPI_OPS: DpapiStoreOps = {
 
 type DpapiSecretBag = {
   xoxd?: string;
+  xoxd_by_workspace: Record<string, string>;
   xoxc: Record<string, string>;
   token: Record<string, string>;
 };
@@ -36,6 +37,18 @@ function isPlaceholderSecret(value: string | undefined): boolean {
   return !value || value === KEYCHAIN_PLACEHOLDER || value === DPAPI_PLACEHOLDER;
 }
 
+function extractStringRecord(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (isRecord(value)) {
+    for (const [k, v] of Object.entries(value)) {
+      if (typeof v === "string") {
+        out[k] = v;
+      }
+    }
+  }
+  return out;
+}
+
 function parseDpapiSecretBag(raw: Buffer): DpapiSecretBag | null {
   try {
     const parsed: unknown = JSON.parse(raw.toString("utf8"));
@@ -43,31 +56,28 @@ function parseDpapiSecretBag(raw: Buffer): DpapiSecretBag | null {
       return null;
     }
     const xoxd = typeof parsed.xoxd === "string" ? parsed.xoxd : undefined;
-    const xoxc: Record<string, string> = {};
-    if (isRecord(parsed.xoxc)) {
-      for (const [k, v] of Object.entries(parsed.xoxc)) {
-        if (typeof v === "string") {
-          xoxc[k] = v;
-        }
-      }
-    }
-    const token: Record<string, string> = {};
-    if (isRecord(parsed.token)) {
-      for (const [k, v] of Object.entries(parsed.token)) {
-        if (typeof v === "string") {
-          token[k] = v;
-        }
-      }
-    }
-    return { xoxd, xoxc, token };
+    return {
+      xoxd,
+      xoxd_by_workspace: extractStringRecord(parsed.xoxd_by_workspace),
+      xoxc: extractStringRecord(parsed.xoxc),
+      token: extractStringRecord(parsed.token),
+    };
   } catch {
     return null;
   }
 }
 
+function hasDpapiPlaceholder(workspaces: Workspace[]): boolean {
+  return workspaces.some((w) =>
+    w.auth.auth_type === "browser"
+      ? w.auth.xoxc_token === DPAPI_PLACEHOLDER || w.auth.xoxd_cookie === DPAPI_PLACEHOLDER
+      : w.auth.token === DPAPI_PLACEHOLDER,
+  );
+}
+
 type SecretLookup = {
   getXoxc: (url: string, current: string) => string | null | undefined;
-  getXoxd: (current: string) => string | null | undefined;
+  getXoxd: (url: string, current: string) => string | null | undefined;
   getToken: (url: string, current: string) => string | null | undefined;
 };
 
@@ -80,7 +90,7 @@ function hydrateWorkspaces(workspaces: Workspace[], lookup: SecretLookup): Works
         auth: {
           auth_type: "browser" as const,
           xoxc_token: lookup.getXoxc(url, w.auth.xoxc_token) ?? w.auth.xoxc_token,
-          xoxd_cookie: lookup.getXoxd(w.auth.xoxd_cookie) ?? w.auth.xoxd_cookie,
+          xoxd_cookie: lookup.getXoxd(url, w.auth.xoxd_cookie) ?? w.auth.xoxd_cookie,
         },
       };
     }
@@ -107,20 +117,29 @@ export function hydrateWindowsDpapiCredentials(
   }
 
   let bag: DpapiSecretBag | null = null;
+  let decryptError: unknown;
   try {
     const decrypted = ops.unprotect(Buffer.from(dpapiSecrets, "base64"));
     bag = parseDpapiSecretBag(decrypted);
-  } catch {
+  } catch (err) {
+    decryptError = err;
     bag = null;
   }
 
   if (!bag) {
+    if (hasDpapiPlaceholder(rest.workspaces)) {
+      throw new Error(
+        "Failed to decrypt Windows DPAPI credentials; refusing to continue with placeholder tokens to avoid overwriting stored secrets.",
+        { cause: decryptError },
+      );
+    }
     return rest;
   }
 
   const workspaces = hydrateWorkspaces(rest.workspaces, {
     getXoxc: (url, current) => (current === DPAPI_PLACEHOLDER ? bag.xoxc[url] : current),
-    getXoxd: (current) => (current === DPAPI_PLACEHOLDER ? bag.xoxd : current),
+    getXoxd: (url, current) =>
+      current === DPAPI_PLACEHOLDER ? (bag.xoxd_by_workspace[url] ?? bag.xoxd) : current,
     getToken: (url, current) => (current === DPAPI_PLACEHOLDER ? bag.token[url] : current),
   });
 
@@ -131,8 +150,14 @@ export function sealWindowsDpapiCredentials(
   payload: Credentials,
   ops: DpapiStoreOps = DEFAULT_DPAPI_OPS,
 ): Credentials {
-  const { dpapi_secrets: _ignored, ...clean } = payload;
-  const bag: DpapiSecretBag = { xoxc: {}, token: {} };
+  const { dpapi_secrets: existingEnvelope, ...clean } = payload;
+  if (hasDpapiPlaceholder(clean.workspaces)) {
+    throw new Error(
+      "Refusing to save credentials containing unhydrated Windows DPAPI placeholders.",
+    );
+  }
+
+  const bag: DpapiSecretBag = { xoxd_by_workspace: {}, xoxc: {}, token: {} };
   let hasSecret = false;
 
   for (const w of clean.workspaces) {
@@ -142,8 +167,8 @@ export function sealWindowsDpapiCredentials(
         bag.xoxc[url] = w.auth.xoxc_token;
         hasSecret = true;
       }
-      if (!bag.xoxd && !isPlaceholderSecret(w.auth.xoxd_cookie)) {
-        bag.xoxd = w.auth.xoxd_cookie;
+      if (!isPlaceholderSecret(w.auth.xoxd_cookie)) {
+        bag.xoxd_by_workspace[url] = w.auth.xoxd_cookie;
         hasSecret = true;
       }
     } else if (w.auth.auth_type === "standard") {
@@ -155,6 +180,7 @@ export function sealWindowsDpapiCredentials(
   }
 
   if (!hasSecret) {
+    void existingEnvelope;
     return clean;
   }
 
@@ -168,7 +194,7 @@ export function sealWindowsDpapiCredentials(
           auth: {
             auth_type: "browser" as const,
             xoxc_token: bag.xoxc[url] ? DPAPI_PLACEHOLDER : w.auth.xoxc_token,
-            xoxd_cookie: bag.xoxd ? DPAPI_PLACEHOLDER : w.auth.xoxd_cookie,
+            xoxd_cookie: bag.xoxd_by_workspace[url] ? DPAPI_PLACEHOLDER : w.auth.xoxd_cookie,
           },
         };
       }

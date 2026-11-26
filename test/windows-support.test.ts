@@ -282,7 +282,16 @@ describe("Windows DPAPI batched credential store", () => {
         auth: {
           auth_type: "browser",
           xoxc_token: "xoxc-secret-1",
-          xoxd_cookie: "xoxd-cookie-shared",
+          xoxd_cookie: "xoxd-cookie-team-1",
+        },
+      },
+      {
+        workspace_url: "https://team3.slack.com",
+        workspace_name: "Team 3",
+        auth: {
+          auth_type: "browser",
+          xoxc_token: "xoxc-secret-3",
+          xoxd_cookie: "xoxd-cookie-team-3",
         },
       },
       {
@@ -315,13 +324,39 @@ describe("Windows DPAPI batched credential store", () => {
     expect(protectCalls).toBe(1);
     expect(sealed.dpapi_secrets).toBeTruthy();
     expect(JSON.stringify(sealed)).not.toContain("xoxc-secret-1");
-    expect(JSON.stringify(sealed)).not.toContain("xoxd-cookie-shared");
+    expect(JSON.stringify(sealed)).not.toContain("xoxc-secret-3");
+    expect(JSON.stringify(sealed)).not.toContain("xoxd-cookie-team-1");
+    expect(JSON.stringify(sealed)).not.toContain("xoxd-cookie-team-3");
     expect(JSON.stringify(sealed)).not.toContain("xoxb-secret-2");
 
     const hydrated = hydrateWindowsDpapiCredentials(sealed, fakeOps);
     expect(unprotectCalls).toBe(1);
     expect(hydrated.dpapi_secrets).toBeUndefined();
     expect(hydrated.workspaces).toEqual(sampleCreds.workspaces);
+  });
+
+  test("fails closed on transient DPAPI decrypt failure to prevent overwriting encrypted secrets", () => {
+    const workingOps: DpapiStoreOps = {
+      protect: (buf) => Buffer.concat([Buffer.from("ENC:"), buf]),
+      unprotect: (buf) => buf.subarray(4),
+    };
+    const sealed = sealWindowsDpapiCredentials(sampleCreds, workingOps);
+
+    const failingDecryptOps: DpapiStoreOps = {
+      protect: () => {
+        throw new Error("should not be called");
+      },
+      unprotect: () => {
+        throw new Error("PowerShell timed out");
+      },
+    };
+
+    expect(() => hydrateWindowsDpapiCredentials(sealed, failingDecryptOps)).toThrow(
+      "Failed to decrypt Windows DPAPI credentials",
+    );
+    expect(() => sealWindowsDpapiCredentials(sealed, workingOps)).toThrow(
+      "Refusing to save credentials containing unhydrated Windows DPAPI placeholders",
+    );
   });
 
   test("loads legacy plaintext credentials with zero DPAPI calls and falls back on protect error", () => {

@@ -221,6 +221,21 @@ function verifyDpapiAndFallbackMatrix(): void {
         JSON.stringify(hydrated.workspaces) === JSON.stringify(ds.creds.workspaces),
         `${label}:NoTokenLoss`,
       );
+
+      if (dpapiOk && ds.hasSecrets) {
+        let failedClosed = false;
+        try {
+          hydrateWindowsDpapiCredentials(sealed, {
+            protect: ops.protect,
+            unprotect: () => {
+              throw new Error("transient timeout");
+            },
+          });
+        } catch {
+          failedClosed = true;
+        }
+        assert(failedClosed, `${label}:FailClosedOnTransientDecryptError`);
+      }
     }
   }
 

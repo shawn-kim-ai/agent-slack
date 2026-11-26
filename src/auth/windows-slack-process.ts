@@ -57,6 +57,9 @@ function defaultStartSlack(exePath: string): void {
     stdio: "ignore",
     windowsHide: false,
   });
+  child.on("error", () => {
+    // Best-effort relaunch: prevent unhandled async spawn errors (ENOENT/EACCES).
+  });
   child.unref();
 }
 
