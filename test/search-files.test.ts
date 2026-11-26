@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   searchFilesInChannelsFallback,
@@ -72,7 +72,7 @@ describe("searchFilesViaSearchApi", () => {
       title: "Working report",
       mimetype: "text/plain",
     });
-    expect(result[0]!.path.endsWith("/F2.txt")).toBe(true);
+    expect(basename(result[0]!.path)).toBe("F2.txt");
   });
 });
 
@@ -137,7 +137,7 @@ describe("searchFilesInChannelsFallback", () => {
       title: "Healthy report",
       mimetype: "text/plain",
     });
-    expect(result[0]!.path.endsWith("/F2.txt")).toBe(true);
+    expect(basename(result[0]!.path)).toBe("F2.txt");
   });
 });
 

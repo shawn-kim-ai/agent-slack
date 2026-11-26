@@ -1,8 +1,9 @@
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync, unlinkSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, win32 } from "node:path";
 import { getAppDir } from "./app-dir.ts";
 import { readJsonFile, writeJsonFile } from "./fs.ts";
 import { getPackageVersion } from "./version.ts";
@@ -109,6 +110,10 @@ export async function checkForUpdate(force = false): Promise<{
 
 export type InstallMethod = "binary" | "npm" | "bun";
 
+function executableBaseName(execPath: string): string {
+  return (execPath.includes("\\") ? win32.basename(execPath) : basename(execPath)).toLowerCase();
+}
+
 /**
  * Detect how agent-slack was installed so we can use the right update strategy.
  *
@@ -116,17 +121,21 @@ export type InstallMethod = "binary" | "npm" | "bun";
  * - "bun"    → running via Bun runtime (bun install -g agent-slack / bunx)
  * - "binary" → standalone compiled binary (GitHub release)
  */
-export function detectInstallMethod(): InstallMethod {
+export function detectInstallMethod(
+  execPath: string = process.execPath,
+  env: NodeJS.ProcessEnv = process.env,
+): InstallMethod {
+  const execName = executableBaseName(execPath);
+
   // Running under Bun runtime (bun install -g, bunx, bun run, etc.)
   // Note: compiled bun binaries also have process.versions.bun set,
   // so we check that the executable is actually the bun runtime itself.
-  if (process.versions.bun && basename(process.execPath) === "bun") {
+  if (process.versions.bun && (execName === "bun" || execName === "bun.exe")) {
     return "bun";
   }
 
   // Running under Node.js (npm install -g, npx, etc.)
-  const execName = basename(process.execPath);
-  if (["node", "nodejs", "node.exe"].includes(execName) || process.env.npm_execpath) {
+  if (["node", "nodejs", "node.exe"].includes(execName) || env.npm_execpath) {
     return "npm";
   }
 
@@ -178,6 +187,97 @@ function detectPlatformAsset(): string {
 async function sha256(filePath: string): Promise<string> {
   const data = await readFile(filePath);
   return createHash("sha256").update(data).digest("hex");
+}
+
+export type ReplaceBinaryOps = {
+  rename: (src: string, dest: string) => Promise<void>;
+  copyFile: (src: string, dest: string) => Promise<void>;
+  chmod: (path: string, mode: number) => Promise<void>;
+  rm: (path: string, options?: { force?: boolean }) => Promise<void>;
+};
+
+export async function replaceBinaryFile(input: {
+  sourcePath: string;
+  targetPath: string;
+  platform?: NodeJS.Platform;
+  ops?: ReplaceBinaryOps;
+}): Promise<{ backupCleanupDeferred: boolean }> {
+  const targetPlatform = input.platform ?? process.platform;
+  const ops: ReplaceBinaryOps = input.ops ?? { rename, copyFile, chmod, rm };
+  const stagedPath = `${input.targetPath}.new`;
+  const backupPath = `${input.targetPath}.bak`;
+
+  // 1. Stage the new binary on the same volume before touching the live binary.
+  await ops.copyFile(input.sourcePath, stagedPath);
+  try {
+    if (targetPlatform !== "win32") {
+      await ops.chmod(stagedPath, 0o755);
+    }
+  } catch (err) {
+    await ops.rm(stagedPath, { force: true }).catch(() => {});
+    throw err;
+  }
+
+  // 2. Move current -> backup, then atomically rename staged -> current.
+  try {
+    await ops.rename(input.targetPath, backupPath);
+  } catch (err) {
+    await ops.rm(stagedPath, { force: true }).catch(() => {});
+    throw err;
+  }
+
+  try {
+    await ops.rename(stagedPath, input.targetPath);
+  } catch (err) {
+    await ops.rm(stagedPath, { force: true }).catch(() => {});
+    try {
+      await ops.rename(backupPath, input.targetPath);
+    } catch (restoreErr) {
+      throw new Error(
+        `Failed to install updated binary and failed to restore backup; recover manually from "${backupPath}".`,
+        { cause: new AggregateError([err, restoreErr], "update and rollback both failed") },
+      );
+    }
+    throw err;
+  }
+
+  // 3. Remove backup; on Windows, a running .exe cannot be unlinked until exit.
+  try {
+    await ops.rm(backupPath, { force: true });
+    return { backupCleanupDeferred: false };
+  } catch (err) {
+    if (targetPlatform === "win32") {
+      return { backupCleanupDeferred: true };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Best-effort cleanup of a stale `.bak` binary left behind by a previous
+ * Windows self-update. Runs synchronously only when the file exists so short
+ * commands (`--version`, `--help`) reliably clean it up.
+ */
+export function cleanupStaleBackupBinary(
+  execPath: string = process.execPath,
+  targetPlatform: NodeJS.Platform = process.platform,
+): void {
+  if (targetPlatform !== "win32") {
+    return;
+  }
+  const execName = executableBaseName(execPath);
+  if (["bun", "bun.exe", "node", "nodejs", "node.exe"].includes(execName)) {
+    return;
+  }
+  const backupPath = `${execPath}.bak`;
+  if (!existsSync(backupPath)) {
+    return;
+  }
+  try {
+    unlinkSync(backupPath);
+  } catch {
+    // ignore if still locked
+  }
 }
 
 /**
@@ -248,24 +348,10 @@ export async function performUpdate(
     }
 
     // Replace current binary
-    const currentBin = process.execPath;
-    const backupPath = `${currentBin}.bak`;
-
-    // Rename current -> backup, copy new -> current, remove backup
-    await rename(currentBin, backupPath);
-    try {
-      await copyFile(binTmp, currentBin);
-      await chmod(currentBin, 0o755);
-      await rm(backupPath, { force: true });
-    } catch (err) {
-      // Restore backup on failure
-      try {
-        await rename(backupPath, currentBin);
-      } catch {
-        // ignore restore failure
-      }
-      throw err;
-    }
+    await replaceBinaryFile({
+      sourcePath: binTmp,
+      targetPath: process.execPath,
+    });
 
     return { success: true, message: `Updated agent-slack to ${latest}` };
   } finally {

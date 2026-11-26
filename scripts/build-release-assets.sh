@@ -50,6 +50,7 @@ build "bun-linux-x64-musl" "agent-slack-linux-x64-musl"
 build "bun-linux-arm64" "agent-slack-linux-arm64"
 build "bun-linux-arm64-musl" "agent-slack-linux-arm64-musl"
 build "bun-windows-x64" "agent-slack-windows-x64.exe"
+build "bun-windows-arm64" "agent-slack-windows-arm64.exe"
 
 (
   cd "$outdir"

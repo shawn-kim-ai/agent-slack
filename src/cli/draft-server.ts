@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { execFile } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { resolveWindowsSystemBinary } from "../auth/windows-dpapi.ts";
 // @ts-ignore — import attributes need module:"esnext" in tsconfig; Bun handles this fine
 import _editorHtmlContent from "./draft-editor.html" with { type: "text" };
 
@@ -161,10 +162,25 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+export function getBrowserLaunchCommand(
+  url: string,
+  targetPlatform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (targetPlatform === "darwin") {
+    return { command: "open", args: [url] };
+  }
+  if (targetPlatform === "win32") {
+    return {
+      command: resolveWindowsSystemBinary("rundll32.exe"),
+      args: ["url.dll,FileProtocolHandler", url],
+    };
+  }
+  return { command: "xdg-open", args: [url] };
+}
+
 function openBrowser(url: string): void {
-  const cmd =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  execFile(cmd, [url], () => {});
+  const { command, args } = getBrowserLaunchCommand(url);
+  execFile(command, args, () => {});
 }
 
 function buildSlackThreadUrl(config: DraftEditorConfig): string | null {

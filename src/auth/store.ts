@@ -2,10 +2,25 @@ import { CREDENTIALS_FILE, KEYCHAIN_SERVICE } from "./paths.ts";
 import { readJsonFile, writeJsonFile } from "../lib/fs.ts";
 import { CredentialsSchema, type Credentials, type Workspace } from "./schema.ts";
 import { keychainGet, keychainSet } from "./keychain.ts";
+import {
+  DPAPI_PLACEHOLDER,
+  hydrateWindowsDpapiCredentials,
+  sealWindowsDpapiCredentials,
+} from "./windows-credential-store.ts";
+import { isRecord } from "../lib/object-type-guards.ts";
 import { platform } from "node:os";
+
+export {
+  hydrateWindowsDpapiCredentials,
+  sealWindowsDpapiCredentials,
+  type DpapiStoreOps,
+} from "./windows-credential-store.ts";
 
 const KEYCHAIN_PLACEHOLDER = "__KEYCHAIN__";
 const IS_MACOS = platform() === "darwin";
+const IS_WIN32 = platform() === "win32";
+
+let cachedWindowsCredentials: { creds: Credentials; wasSealed: boolean } | null = null;
 
 function normalizeWorkspaceUrl(workspaceUrl: string): string {
   const u = new URL(workspaceUrl);
@@ -13,22 +28,37 @@ function normalizeWorkspaceUrl(workspaceUrl: string): string {
 }
 
 function isPlaceholderSecret(value: string | undefined): boolean {
-  return !value || value === KEYCHAIN_PLACEHOLDER;
+  return !value || value === KEYCHAIN_PLACEHOLDER || value === DPAPI_PLACEHOLDER;
 }
 
 export async function loadCredentials(): Promise<Credentials> {
+  if (IS_WIN32 && cachedWindowsCredentials) {
+    return structuredClone(cachedWindowsCredentials.creds);
+  }
+
   const fromFile = await readJsonFile<unknown>(CREDENTIALS_FILE);
   const parsed = CredentialsSchema.safeParse(fromFile ?? { version: 1, workspaces: [] });
   if (!parsed.success) {
+    if (IS_WIN32 && isRecord(fromFile) && fromFile.dpapi_secrets !== undefined) {
+      throw new Error(
+        `Windows credentials file "${CREDENTIALS_FILE}" has a malformed DPAPI envelope; refusing to overwrite it. Delete the file and re-run "agent-slack auth import-desktop".`,
+      );
+    }
     return { version: 1, workspaces: [] };
   }
 
-  // Optional: hydrate browser cookie/token from keychain for security.
-  const creds = parsed.data;
+  if (IS_WIN32) {
+    const wasSealed = Boolean(parsed.data.dpapi_secrets);
+    const hydrated = hydrateWindowsDpapiCredentials(parsed.data);
+    cachedWindowsCredentials = { creds: structuredClone(hydrated), wasSealed };
+    return hydrated;
+  }
+
+  const { dpapi_secrets: _dpapi, ...creds } = parsed.data;
   const hydrated = creds.workspaces.map((w) => {
+    const url = normalizeWorkspaceUrl(w.workspace_url);
     if (w.auth.auth_type === "browser") {
-      const account = `xoxc:${normalizeWorkspaceUrl(w.workspace_url)}`;
-      const xoxc = keychainGet(account, KEYCHAIN_SERVICE);
+      const xoxc = keychainGet(`xoxc:${url}`, KEYCHAIN_SERVICE);
       const xoxd = keychainGet("xoxd", KEYCHAIN_SERVICE);
       return {
         ...w,
@@ -40,8 +70,7 @@ export async function loadCredentials(): Promise<Credentials> {
       };
     }
     if (w.auth.auth_type === "standard") {
-      const account = `token:${normalizeWorkspaceUrl(w.workspace_url)}`;
-      const token = keychainGet(account, KEYCHAIN_SERVICE);
+      const token = keychainGet(`token:${url}`, KEYCHAIN_SERVICE);
       return {
         ...w,
         auth: {
@@ -66,12 +95,27 @@ export async function saveCredentials(credentials: Credentials): Promise<void> {
     })),
   };
 
-  // Store secrets in keychain when possible and avoid writing plaintext tokens to disk.
-  // If keychain writes fail (or non-macOS), fall back to storing secrets in the file.
-  const filePayload: Credentials = structuredClone(payload);
+  if (IS_WIN32) {
+    const wasSealed =
+      cachedWindowsCredentials?.wasSealed ??
+      Boolean(
+        CredentialsSchema.safeParse(await readJsonFile<unknown>(CREDENTIALS_FILE)).data
+          ?.dpapi_secrets,
+      );
+    const sealed = sealWindowsDpapiCredentials(structuredClone(payload), {
+      requireEncryption: wasSealed,
+    });
+    await writeJsonFile(CREDENTIALS_FILE, sealed);
+    cachedWindowsCredentials = {
+      creds: structuredClone(payload),
+      wasSealed: Boolean(sealed.dpapi_secrets),
+    };
+    return;
+  }
+
+  const { dpapi_secrets: _dpapi, ...filePayload }: Credentials = structuredClone(payload);
 
   if (IS_MACOS) {
-    // Browser auth: xoxd is shared across workspaces, xoxc is per-workspace.
     const firstBrowser = payload.workspaces.find((w) => w.auth.auth_type === "browser");
     let xoxdStored = false;
     if (
@@ -212,5 +256,3 @@ export async function resolveDefaultWorkspace(): Promise<Workspace | null> {
   }
   return creds.workspaces[0] ?? null;
 }
-
-// (reserved for future non-secret per-workspace metadata)

@@ -1,7 +1,6 @@
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { createDecipheriv, randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
+import { createDecipheriv } from "node:crypto";
 import { join } from "node:path";
 import { isRecord } from "../lib/object-type-guards.ts";
 import {
@@ -11,6 +10,7 @@ import {
   type KeychainOptions,
   type KeychainQuery,
 } from "./keychain.ts";
+import { DEFAULT_DPAPI_TIMEOUT_MS, dpapiUnprotect } from "./windows-dpapi.ts";
 
 const IS_MACOS = process.platform === "darwin";
 const IS_LINUX = process.platform === "linux";
@@ -104,54 +104,24 @@ export function decryptCookieWindows(encrypted: Buffer, slackDataDir: string): s
     throw new Error("No os_crypt.encrypted_key in Local State");
   }
   const encKeyFull = Buffer.from(osCrypt.encrypted_key as string, "base64");
-  // Skip "DPAPI" prefix (5 bytes)
+  if (encKeyFull.subarray(0, 5).toString("utf8") !== "DPAPI") {
+    throw new Error("Unsupported os_crypt.encrypted_key format (expected DPAPI prefix)");
+  }
   const encKeyBlob = encKeyFull.subarray(5);
 
-  // Decrypt AES key via Windows DPAPI using PowerShell
-  const id = randomUUID();
-  const encKeyFile = join(tmpdir(), `as-key-enc-${id}.bin`);
-  const decKeyFile = join(tmpdir(), `as-key-dec-${id}.bin`);
-  writeFileSync(encKeyFile, encKeyBlob, { mode: 0o600 });
-  try {
-    // Escape single quotes for PowerShell single-quoted strings (' → '')
-    const psEncKeyFile = encKeyFile.replaceAll("'", "''");
-    const psDecKeyFile = decKeyFile.replaceAll("'", "''");
-    const psCmd = [
-      "Add-Type -AssemblyName System.Security",
-      `$e=[System.IO.File]::ReadAllBytes('${psEncKeyFile}')`,
-      "$d=[System.Security.Cryptography.ProtectedData]::Unprotect($e,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)",
-      `[System.IO.File]::WriteAllBytes('${psDecKeyFile}',$d)`,
-    ].join("; ");
-    execFileSync("powershell", ["-ExecutionPolicy", "Bypass", "-Command", psCmd], {
-      stdio: "pipe",
-    });
-    if (!existsSync(decKeyFile)) {
-      throw new Error("DPAPI decryption failed: PowerShell did not produce the decrypted key file");
-    }
-    const aesKey = readFileSync(decKeyFile);
+  const timeoutMs = Math.max(DEFAULT_DPAPI_TIMEOUT_MS, getKeychainTimeoutMs());
+  const aesKey = dpapiUnprotect(encKeyBlob, { timeoutMs });
 
-    // AES-256-GCM: v10(3) + nonce(12) + ciphertext(N-16) + tag(16)
-    const nonce = encrypted.subarray(3, 15);
-    const ciphertextWithTag = encrypted.subarray(15);
-    const tag = ciphertextWithTag.subarray(-16);
-    const ciphertext = ciphertextWithTag.subarray(0, -16);
+  // AES-256-GCM: v10(3) + nonce(12) + ciphertext(N-16) + tag(16)
+  const nonce = encrypted.subarray(3, 15);
+  const ciphertextWithTag = encrypted.subarray(15);
+  const tag = ciphertextWithTag.subarray(-16);
+  const ciphertext = ciphertextWithTag.subarray(0, -16);
 
-    const decipher = createDecipheriv("aes-256-gcm", aesKey, nonce);
-    decipher.setAuthTag(tag);
-    let decrypted = decipher.update(ciphertext, undefined, "utf8");
-    decrypted += decipher.final("utf8");
+  const decipher = createDecipheriv("aes-256-gcm", aesKey, nonce);
+  decipher.setAuthTag(tag);
+  let decrypted = decipher.update(ciphertext, undefined, "utf8");
+  decrypted += decipher.final("utf8");
 
-    return decrypted;
-  } finally {
-    try {
-      unlinkSync(encKeyFile);
-    } catch {
-      /* ignore */
-    }
-    try {
-      unlinkSync(decKeyFile);
-    } catch {
-      /* ignore */
-    }
-  }
+  return decrypted;
 }

@@ -1,7 +1,7 @@
 // Desktop auth extraction approach inspired by:
 // - slacktokens: https://github.com/hraftery/slacktokens
-import { cp, mkdir, rm, unlink } from "node:fs/promises";
-import { existsSync, readdirSync, copyFileSync, unlinkSync } from "node:fs";
+import { cp, mkdir, mkdtemp, rm, unlink } from "node:fs/promises";
+import { existsSync, readdirSync, copyFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir, platform, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,11 @@ import { queryReadonlySqlite } from "./firefox-profile.ts";
 import { decryptChromiumCookieValue } from "./chromium-cookie.ts";
 import { getSafeStoragePasswords, decryptCookieWindows } from "./desktop-crypto.ts";
 import { KeychainAccessError, type KeychainOptions } from "./keychain.ts";
+import { withWindowsSlackStopped } from "./windows-slack-process.ts";
+
+export type ExtractDesktopOptions = KeychainOptions & {
+  restartSlack?: boolean;
+};
 
 type DesktopTeam = { url: string; name?: string; token: string };
 
@@ -266,18 +271,45 @@ async function extractTeamsFromSlackLevelDb(leveldbDir: string): Promise<Desktop
 
 async function extractCookieDFromSlackCookiesDb(
   { cookiesPath, slackDataDir }: { cookiesPath: string; slackDataDir: string },
-  options: KeychainOptions,
+  options: ExtractDesktopOptions,
 ): Promise<string> {
   if (!existsSync(cookiesPath)) {
     throw new Error(`Slack Cookies DB not found: ${cookiesPath}`);
   }
 
   // On Windows, Slack holds an exclusive lock on the Cookies DB while running.
-  // Copy it to a temp location before reading.
+  // Copy it (plus any SQLite WAL/SHM/journal sidecars) to a temp dir before reading.
   let dbPathToQuery = cookiesPath;
+  let tmpCookieDir: string | null = null;
   if (IS_WIN32) {
-    const tmpCopy = join(tmpdir(), `agent-slack-cookies-${Date.now()}`);
-    copyFileSync(cookiesPath, tmpCopy);
+    tmpCookieDir = await mkdtemp(join(tmpdir(), "agent-slack-cookies-"));
+    const tmpCopy = join(tmpCookieDir, "Cookies");
+    try {
+      copyFileSync(cookiesPath, tmpCopy);
+      for (const suffix of ["-wal", "-shm", "-journal"]) {
+        const sidecar = `${cookiesPath}${suffix}`;
+        if (existsSync(sidecar)) {
+          try {
+            copyFileSync(sidecar, `${tmpCopy}${suffix}`);
+          } catch {
+            // ignore sidecar copy errors
+          }
+        }
+      }
+    } catch (err: unknown) {
+      await rm(tmpCookieDir, { recursive: true, force: true }).catch(() => {});
+      const code = isRecord(err) && typeof err.code === "string" ? err.code : "";
+      if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+        const hint = options.restartSlack
+          ? "Quit Slack completely (including the system tray icon) and retry."
+          : 'Quit Slack completely (including the system tray icon) and retry, or run "agent-slack auth import-desktop --restart-slack".';
+        throw new Error(
+          `Slack Cookies DB is locked while Slack Desktop is running (${cookiesPath}). ${hint}`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
     dbPathToQuery = tmpCopy;
   }
 
@@ -293,12 +325,8 @@ async function extractCookieDFromSlackCookiesDb(
       "select host_key, name, value, encrypted_value from cookies where name = 'd' and host_key like '%slack.com' order by length(encrypted_value) desc",
     )) as typeof rows;
   } finally {
-    if (IS_WIN32 && dbPathToQuery !== cookiesPath) {
-      try {
-        unlinkSync(dbPathToQuery);
-      } catch {
-        /* ignore */
-      }
+    if (tmpCookieDir) {
+      await rm(tmpCookieDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -358,31 +386,38 @@ function formatDesktopExtractionErrors(errors: string[]): string {
 }
 
 export async function extractFromSlackDesktop(
-  options: KeychainOptions = {},
+  options: ExtractDesktopOptions = {},
 ): Promise<DesktopExtracted> {
-  const allPaths = getAllSlackPaths();
+  const runExtraction = async (): Promise<DesktopExtracted> => {
+    const allPaths = getAllSlackPaths();
 
-  // Try each candidate path; use the first one where both LevelDB and cookie extraction succeed.
-  const errors: string[] = [];
-  for (const { leveldbDir, cookiesDb, baseDir } of allPaths) {
-    try {
-      const teams = await extractTeamsFromSlackLevelDb(leveldbDir);
-      const cookie_d = await extractCookieDFromSlackCookiesDb(
-        { cookiesPath: cookiesDb, slackDataDir: baseDir },
-        options,
-      );
-      return {
-        cookie_d,
-        teams,
-        source: { leveldb_path: leveldbDir, cookies_path: cookiesDb },
-      };
-    } catch (err: unknown) {
-      errors.push(`${baseDir}: ${err instanceof Error ? err.message : String(err)}`);
-      if (err instanceof KeychainAccessError) {
-        throw new KeychainAccessError(formatDesktopExtractionErrors(errors));
+    // Try each candidate path; use the first one where both LevelDB and cookie extraction succeed.
+    const errors: string[] = [];
+    for (const { leveldbDir, cookiesDb, baseDir } of allPaths) {
+      try {
+        const teams = await extractTeamsFromSlackLevelDb(leveldbDir);
+        const cookie_d = await extractCookieDFromSlackCookiesDb(
+          { cookiesPath: cookiesDb, slackDataDir: baseDir },
+          options,
+        );
+        return {
+          cookie_d,
+          teams,
+          source: { leveldb_path: leveldbDir, cookies_path: cookiesDb },
+        };
+      } catch (err: unknown) {
+        errors.push(`${baseDir}: ${err instanceof Error ? err.message : String(err)}`);
+        if (err instanceof KeychainAccessError) {
+          throw new KeychainAccessError(formatDesktopExtractionErrors(errors));
+        }
       }
     }
-  }
 
-  throw new Error(formatDesktopExtractionErrors(errors));
+    throw new Error(formatDesktopExtractionErrors(errors));
+  };
+
+  if (IS_WIN32 && options.restartSlack) {
+    return await withWindowsSlackStopped(runExtraction);
+  }
+  return await runExtraction();
 }

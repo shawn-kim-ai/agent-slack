@@ -11,17 +11,26 @@ Guiding principle:
 
 ## Getting started
 
-Install via Bun (recommended):
+Install on macOS / Linux (standalone binary, recommended):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/stablyai/agent-slack/main/install.sh | sh
 ```
 
-OR npm global install (requires Node >= 22.5):
+Install on Windows (recommended — runs on signed Node >= 22.5, works under Smart App Control / WDAC):
 
-```bash
+```powershell
 npm i -g agent-slack
 ```
+
+<details>
+<summary>Windows standalone binary (unsigned .exe — for machines without Smart App Control / WDAC)</summary>
+
+```powershell
+irm https://raw.githubusercontent.com/stablyai/agent-slack/main/install.ps1 | iex
+```
+
+</details>
 
 OR run via Nix flake:
 

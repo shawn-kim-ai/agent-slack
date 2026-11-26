@@ -7,8 +7,12 @@ on:
 
 jobs:
   build_lint_test:
-    name: Build, Lint, Test
-    runs-on: ubuntu-latest
+    name: Build, Lint, Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -21,15 +25,17 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.4.5"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
       - name: Lint
+        if: matrix.os == 'ubuntu-latest'
         run: bun run lint
 
       - name: Format check
+        if: matrix.os == 'ubuntu-latest'
         run: bun run format:check
 
       - name: Typecheck
@@ -40,3 +46,20 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      - name: Windows formal state-space check
+        run: bun .agents/skills/verify-windows-formal/check.ts
+
+      - name: Smoke test compiled binary (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          bun build src/index.ts --compile --outfile=dist/agent-slack-smoke.exe --define "AGENT_SLACK_BUILD_VERSION='$version'"
+          if ($LASTEXITCODE -ne 0) {
+            throw "bun build --compile failed with exit code $LASTEXITCODE"
+          }
+          $actual = (& ./dist/agent-slack-smoke.exe --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $version) {
+            throw "Compiled binary smoke test failed: expected '$version', got '$actual' (exit $LASTEXITCODE)"
+          }
