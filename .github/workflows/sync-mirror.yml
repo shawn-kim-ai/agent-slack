@@ -1,0 +1,35 @@
+name: Sync Mirror
+
+on:
+  push:
+  delete:
+  workflow_dispatch:
+
+concurrency:
+  group: sync-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'shawn-kim-ai/agent-slack'
+    name: Mirror to markncompany-ai/agent-slack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mirror branches and tags
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MIRROR_TOKEN" ]; then
+            echo "::error::MIRROR_TOKEN secret is not configured"
+            exit 1
+          fi
+          git clone --bare "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" mirror.git
+          cd mirror.git
+          AUTH_HEADER=$(printf 'x-access-token:%s' "$MIRROR_TOKEN" | base64 -w 0)
+          git -c "http.https://github.com/markncompany-ai/agent-slack.git/.extraheader=AUTHORIZATION: basic ${AUTH_HEADER}" \
+            push --prune "https://github.com/markncompany-ai/agent-slack.git" \
+            '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
