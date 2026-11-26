@@ -1,7 +1,7 @@
 import { copyFile, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
-import { basename, join, win32 } from "node:path";
+import { basename, join, posix, win32 } from "node:path";
 
 export type SqliteRow = Record<string, unknown>;
 
@@ -69,13 +69,13 @@ export function getFirefoxBaseDir(options?: {
   const env = options?.env ?? process.env;
   const home = options?.home ?? homedir();
   if (targetPlatform === "linux") {
-    return join(home, ".mozilla", "firefox");
+    return posix.join(home, ".mozilla", "firefox");
   }
   if (targetPlatform === "darwin") {
-    return join(home, "Library", "Application Support", "Firefox");
+    return posix.join(home, "Library", "Application Support", "Firefox");
   }
   if (targetPlatform === "win32") {
-    return join(env.APPDATA || join(home, "AppData", "Roaming"), "Mozilla", "Firefox");
+    return win32.join(env.APPDATA || win32.join(home, "AppData", "Roaming"), "Mozilla", "Firefox");
   }
   return null;
 }

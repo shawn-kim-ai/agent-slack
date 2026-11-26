@@ -79,11 +79,14 @@ describe("Draft editor browser launch command", () => {
 
 describe("Windows self-update behavior", () => {
   test("detects bun.exe, node.exe, and standalone binary", () => {
-    expect(detectInstallMethod("C:\\Users\\alice\\.bun\\bin\\bun.exe")).toBe("bun");
-    expect(detectInstallMethod("/usr/local/bin/bun")).toBe("bun");
-    expect(detectInstallMethod("C:\\Program Files\\nodejs\\node.exe")).toBe("npm");
+    expect(detectInstallMethod("C:\\Users\\alice\\.bun\\bin\\bun.exe", {})).toBe("bun");
+    expect(detectInstallMethod("/usr/local/bin/bun", {})).toBe("bun");
+    expect(detectInstallMethod("C:\\Program Files\\nodejs\\node.exe", {})).toBe("npm");
     expect(
-      detectInstallMethod("C:\\Users\\alice\\AppData\\Local\\agent-slack\\bin\\agent-slack.exe"),
+      detectInstallMethod(
+        "C:\\Users\\alice\\AppData\\Local\\agent-slack\\bin\\agent-slack.exe",
+        {},
+      ),
     ).toBe("binary");
   });
 

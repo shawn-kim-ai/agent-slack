@@ -120,7 +120,10 @@ function executableBaseName(execPath: string): string {
   return (execPath.includes("\\") ? win32.basename(execPath) : basename(execPath)).toLowerCase();
 }
 
-export function detectInstallMethod(execPath: string = process.execPath): InstallMethod {
+export function detectInstallMethod(
+  execPath: string = process.execPath,
+  env: NodeJS.ProcessEnv = process.env,
+): InstallMethod {
   const execName = executableBaseName(execPath);
 
   // Running under Bun runtime (bun install -g, bunx, bun run, etc.)
@@ -131,7 +134,7 @@ export function detectInstallMethod(execPath: string = process.execPath): Instal
   }
 
   // Running under Node.js (npm install -g, npx, etc.)
-  if (["node", "nodejs", "node.exe"].includes(execName) || process.env.npm_execpath) {
+  if (["node", "nodejs", "node.exe"].includes(execName) || env.npm_execpath) {
     return "npm";
   }
 
