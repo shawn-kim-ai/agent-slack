@@ -161,10 +161,22 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+export function getBrowserLaunchCommand(
+  url: string,
+  targetPlatform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (targetPlatform === "darwin") {
+    return { command: "open", args: [url] };
+  }
+  if (targetPlatform === "win32") {
+    return { command: "rundll32", args: ["url.dll,FileProtocolHandler", url] };
+  }
+  return { command: "xdg-open", args: [url] };
+}
+
 function openBrowser(url: string): void {
-  const cmd =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  execFile(cmd, [url], () => {});
+  const { command, args } = getBrowserLaunchCommand(url);
+  execFile(command, args, () => {});
 }
 
 function buildSlackThreadUrl(config: DraftEditorConfig): string | null {

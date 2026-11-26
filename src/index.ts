@@ -13,7 +13,7 @@ import { registerUserCommand } from "./cli/user-command.ts";
 import { registerChannelCommand } from "./cli/channel-command.ts";
 import { registerWorkflowCommand } from "./cli/workflow-command.ts";
 import { registerApiCommand } from "./cli/api-command.ts";
-import { backgroundUpdateCheck } from "./lib/update.ts";
+import { backgroundUpdateCheck, cleanupStaleBackupBinary } from "./lib/update.ts";
 
 const program = new Command();
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
@@ -53,6 +53,7 @@ program
     'Human-in-the-loop enforcement: redirect "message send" to the draft editor, block the CI "message compose" direct-send shortcut, and block "message edit"/"message delete" (also: AGENT_SLACK_SAFE_MODE=1)',
   );
 
+cleanupStaleBackupBinary();
 startCommandWatchdog(process.argv.slice(2));
 
 const ctx = createCliContext();

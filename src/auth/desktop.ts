@@ -11,6 +11,11 @@ import { queryReadonlySqlite } from "./firefox-profile.ts";
 import { decryptChromiumCookieValue } from "./chromium-cookie.ts";
 import { getSafeStoragePasswords, decryptCookieWindows } from "./desktop-crypto.ts";
 import { KeychainAccessError, type KeychainOptions } from "./keychain.ts";
+import { withWindowsSlackStopped } from "./windows-slack-process.ts";
+
+export type ExtractDesktopOptions = KeychainOptions & {
+  restartSlack?: boolean;
+};
 
 type DesktopTeam = { url: string; name?: string; token: string };
 
@@ -277,7 +282,19 @@ async function extractCookieDFromSlackCookiesDb(
   let dbPathToQuery = cookiesPath;
   if (IS_WIN32) {
     const tmpCopy = join(tmpdir(), `agent-slack-cookies-${Date.now()}`);
-    copyFileSync(cookiesPath, tmpCopy);
+    try {
+      copyFileSync(cookiesPath, tmpCopy);
+    } catch (err: unknown) {
+      const code = isRecord(err) && typeof err.code === "string" ? err.code : "";
+      if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+        throw new Error(
+          `Slack Cookies DB is locked while Slack Desktop is running (${cookiesPath}). ` +
+            `Quit Slack completely (including the system tray icon) and retry, or run "agent-slack auth import-desktop --restart-slack".`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
     dbPathToQuery = tmpCopy;
   }
 
@@ -358,31 +375,38 @@ function formatDesktopExtractionErrors(errors: string[]): string {
 }
 
 export async function extractFromSlackDesktop(
-  options: KeychainOptions = {},
+  options: ExtractDesktopOptions = {},
 ): Promise<DesktopExtracted> {
-  const allPaths = getAllSlackPaths();
+  const runExtraction = async (): Promise<DesktopExtracted> => {
+    const allPaths = getAllSlackPaths();
 
-  // Try each candidate path; use the first one where both LevelDB and cookie extraction succeed.
-  const errors: string[] = [];
-  for (const { leveldbDir, cookiesDb, baseDir } of allPaths) {
-    try {
-      const teams = await extractTeamsFromSlackLevelDb(leveldbDir);
-      const cookie_d = await extractCookieDFromSlackCookiesDb(
-        { cookiesPath: cookiesDb, slackDataDir: baseDir },
-        options,
-      );
-      return {
-        cookie_d,
-        teams,
-        source: { leveldb_path: leveldbDir, cookies_path: cookiesDb },
-      };
-    } catch (err: unknown) {
-      errors.push(`${baseDir}: ${err instanceof Error ? err.message : String(err)}`);
-      if (err instanceof KeychainAccessError) {
-        throw new KeychainAccessError(formatDesktopExtractionErrors(errors));
+    // Try each candidate path; use the first one where both LevelDB and cookie extraction succeed.
+    const errors: string[] = [];
+    for (const { leveldbDir, cookiesDb, baseDir } of allPaths) {
+      try {
+        const teams = await extractTeamsFromSlackLevelDb(leveldbDir);
+        const cookie_d = await extractCookieDFromSlackCookiesDb(
+          { cookiesPath: cookiesDb, slackDataDir: baseDir },
+          options,
+        );
+        return {
+          cookie_d,
+          teams,
+          source: { leveldb_path: leveldbDir, cookies_path: cookiesDb },
+        };
+      } catch (err: unknown) {
+        errors.push(`${baseDir}: ${err instanceof Error ? err.message : String(err)}`);
+        if (err instanceof KeychainAccessError) {
+          throw new KeychainAccessError(formatDesktopExtractionErrors(errors));
+        }
       }
     }
-  }
 
-  throw new Error(formatDesktopExtractionErrors(errors));
+    throw new Error(formatDesktopExtractionErrors(errors));
+  };
+
+  if (IS_WIN32 && options.restartSlack) {
+    return await withWindowsSlackStopped(runExtraction);
+  }
+  return await runExtraction();
 }

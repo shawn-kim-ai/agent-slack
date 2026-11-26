@@ -37,7 +37,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.4.5"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -63,6 +63,15 @@ jobs:
 
       - name: Build release binaries
         run: bun run build:release
+
+      - name: Smoke test compiled Linux binary
+        run: |
+          expected=$(node -p "require('./package.json').version")
+          actual=$(./release/agent-slack-linux-x64 --version | tr -d '\r\n')
+          if [ "$actual" != "$expected" ]; then
+            echo "error: compiled binary --version returned '$actual' (expected '$expected')" >&2
+            exit 1
+          fi
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2

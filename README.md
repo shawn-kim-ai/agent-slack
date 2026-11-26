@@ -11,10 +11,16 @@ Guiding principle:
 
 ## Getting started
 
-Install via Bun (recommended):
+Install via standalone binary (recommended):
 
 ```bash
+# macOS / Linux / Git Bash
 curl -fsSL https://raw.githubusercontent.com/stablyai/agent-slack/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/stablyai/agent-slack/main/install.ps1 | iex
 ```
 
 OR npm global install (requires Node >= 22.5):

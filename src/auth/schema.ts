@@ -28,6 +28,7 @@ export const CredentialsSchema = z.object({
   version: z.literal(1),
   updated_at: z.string().optional(),
   default_workspace_url: z.string().url().optional(),
+  dpapi_secrets: z.string().optional(),
   workspaces: z.array(WorkspaceSchema).default([]),
 });
 

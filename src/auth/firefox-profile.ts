@@ -1,8 +1,7 @@
 import { copyFile, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { homedir, platform } from "node:os";
-import { join } from "node:path";
+import { homedir, platform, tmpdir } from "node:os";
+import { basename, join, win32 } from "node:path";
 
 export type SqliteRow = Record<string, unknown>;
 
@@ -14,7 +13,7 @@ export type ProfileCandidate = {
 
 const PLATFORM = platform();
 const IS_MACOS = PLATFORM === "darwin";
-const IS_LINUX = PLATFORM === "linux";
+const IS_WIN32 = PLATFORM === "win32";
 
 export function isMissingBunSqliteModule(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -61,14 +60,24 @@ export async function queryReadonlySqlite(dbPath: string, sql: string): Promise<
   }
 }
 
-export function getFirefoxBaseDir(): string {
-  if (IS_LINUX) {
-    return join(homedir(), ".mozilla", "firefox");
+export function getFirefoxBaseDir(options?: {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+}): string | null {
+  const targetPlatform = options?.platform ?? PLATFORM;
+  const env = options?.env ?? process.env;
+  const home = options?.home ?? homedir();
+  if (targetPlatform === "linux") {
+    return join(home, ".mozilla", "firefox");
   }
-  if (IS_MACOS) {
-    return join(homedir(), "Library", "Application Support", "Firefox");
+  if (targetPlatform === "darwin") {
+    return join(home, "Library", "Application Support", "Firefox");
   }
-  throw new Error(`Firefox extraction is not supported on ${PLATFORM}.`);
+  if (targetPlatform === "win32") {
+    return join(env.APPDATA || join(home, "AppData", "Roaming"), "Mozilla", "Firefox");
+  }
+  return null;
 }
 
 export function parseProfilesIni(raw: string, baseDir: string): ProfileCandidate[] {
@@ -146,6 +155,9 @@ export function parseProfilesIni(raw: string, baseDir: string): ProfileCandidate
 
 export async function listProfileCandidates(): Promise<ProfileCandidate[]> {
   const baseDir = getFirefoxBaseDir();
+  if (!baseDir) {
+    return [];
+  }
   const iniPath = join(baseDir, "profiles.ini");
   const candidates: ProfileCandidate[] = [];
 
@@ -155,7 +167,7 @@ export async function listProfileCandidates(): Promise<ProfileCandidate[]> {
   }
 
   // profiles.ini can be stale, so also scan profile directories as a fallback source.
-  const dirName = IS_MACOS ? "Profiles" : baseDir;
+  const dirName = IS_MACOS || IS_WIN32 ? join(baseDir, "Profiles") : baseDir;
   if (existsSync(dirName)) {
     const entries = await readdir(dirName, { withFileTypes: true });
     for (const entry of entries) {
@@ -174,6 +186,10 @@ export async function listProfileCandidates(): Promise<ProfileCandidate[]> {
   return existing;
 }
 
+function pathBasename(filePath: string): string {
+  return filePath.includes("\\") ? win32.basename(filePath) : basename(filePath);
+}
+
 export function pickCandidatesByProfile(
   candidates: ProfileCandidate[],
   profile?: string,
@@ -185,7 +201,7 @@ export function pickCandidatesByProfile(
   const normalized = selector.toLowerCase();
   const matched = candidates.filter((c) => {
     const name = c.name?.toLowerCase() ?? "";
-    const base = c.path.split("/").pop()?.toLowerCase() ?? "";
+    const base = pathBasename(c.path).toLowerCase();
     const full = c.path.toLowerCase();
     return name === normalized || base === normalized || full.includes(normalized);
   });
@@ -196,7 +212,7 @@ export async function copySqliteForRead(
   dbPath: string,
 ): Promise<{ copyPath: string; cleanup: () => Promise<void> }> {
   const tmpPath = await mkdtemp(join(tmpdir(), "agent-slack-firefox-"));
-  const base = dbPath.split("/").pop() || "db.sqlite";
+  const base = pathBasename(dbPath) || "db.sqlite";
   const copyPath = join(tmpPath, base);
   await copyFile(dbPath, copyPath);
 

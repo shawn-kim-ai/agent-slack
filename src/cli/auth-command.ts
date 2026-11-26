@@ -78,6 +78,11 @@ export function registerAuthCommand(input: { program: Command; ctx: CliContext }
     .description("Import xoxc/xoxd from a logged-in Slack tab in Google Chrome (macOS)")
     .action(async () => {
       try {
+        if (process.platform === "win32") {
+          throw new Error(
+            'Chrome import is macOS-only (Windows Chrome uses App-Bound Encryption). Use "agent-slack auth import-desktop", "agent-slack auth import-firefox", or "agent-slack auth parse-curl" instead.',
+          );
+        }
         const extracted = input.ctx.importChrome();
         if (!extracted) {
           throw new Error(
@@ -110,6 +115,11 @@ export function registerAuthCommand(input: { program: Command; ctx: CliContext }
     )
     .action(async () => {
       try {
+        if (process.platform === "win32") {
+          throw new Error(
+            'Brave import is macOS-only (Windows Brave uses App-Bound Encryption). Use "agent-slack auth import-desktop", "agent-slack auth import-firefox", or "agent-slack auth parse-curl" instead.',
+          );
+        }
         const extracted = await input.ctx.importBrave({ interactive: true });
         if (!extracted) {
           throw new Error(
@@ -138,7 +148,7 @@ export function registerAuthCommand(input: { program: Command; ctx: CliContext }
 
   auth
     .command("import-firefox")
-    .description("Import xoxc/xoxd from Firefox profile storage (macOS/Linux)")
+    .description("Import xoxc/xoxd from Firefox profile storage (macOS/Linux/Windows)")
     .action(async () => {
       try {
         const extracted = await input.ctx.importFirefox();
@@ -194,11 +204,19 @@ export function registerAuthCommand(input: { program: Command; ctx: CliContext }
   auth
     .command("import-desktop")
     .description(
-      "Import xoxc token(s) + d cookie from Slack Desktop data (TypeScript; no need to quit Slack)",
+      "Import xoxc token(s) + d cookie from Slack Desktop data (TypeScript; no need to quit Slack on macOS/Linux)",
     )
-    .action(async () => {
+    .option(
+      "--restart-slack",
+      "Windows only: temporarily stop Slack Desktop to release Cookies DB lock, extract, then relaunch Slack",
+    )
+    .action(async (...args) => {
+      const [options] = args as [{ restartSlack?: boolean }];
       try {
-        const extracted = await input.ctx.importDesktop({ interactive: true });
+        const extracted = await input.ctx.importDesktop({
+          interactive: true,
+          restartSlack: options.restartSlack,
+        });
         await upsertWorkspaces(
           extracted.teams.map((team) => ({
             workspace_url: input.ctx.normalizeUrl(team.url),

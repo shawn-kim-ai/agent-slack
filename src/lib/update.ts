@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, win32 } from "node:path";
 import { getAppDir } from "./app-dir.ts";
 import { readJsonFile, writeJsonFile } from "./fs.ts";
 import { getPackageVersion } from "./version.ts";
@@ -116,16 +116,21 @@ export type InstallMethod = "binary" | "npm" | "bun";
  * - "bun"    → running via Bun runtime (bun install -g agent-slack / bunx)
  * - "binary" → standalone compiled binary (GitHub release)
  */
-export function detectInstallMethod(): InstallMethod {
+function executableBaseName(execPath: string): string {
+  return (execPath.includes("\\") ? win32.basename(execPath) : basename(execPath)).toLowerCase();
+}
+
+export function detectInstallMethod(execPath: string = process.execPath): InstallMethod {
+  const execName = executableBaseName(execPath);
+
   // Running under Bun runtime (bun install -g, bunx, bun run, etc.)
   // Note: compiled bun binaries also have process.versions.bun set,
   // so we check that the executable is actually the bun runtime itself.
-  if (process.versions.bun && basename(process.execPath) === "bun") {
+  if (process.versions.bun && (execName === "bun" || execName === "bun.exe")) {
     return "bun";
   }
 
   // Running under Node.js (npm install -g, npx, etc.)
-  const execName = basename(process.execPath);
   if (["node", "nodejs", "node.exe"].includes(execName) || process.env.npm_execpath) {
     return "npm";
   }
@@ -178,6 +183,71 @@ function detectPlatformAsset(): string {
 async function sha256(filePath: string): Promise<string> {
   const data = await readFile(filePath);
   return createHash("sha256").update(data).digest("hex");
+}
+
+export type ReplaceBinaryOps = {
+  rename: (src: string, dest: string) => Promise<void>;
+  copyFile: (src: string, dest: string) => Promise<void>;
+  chmod: (path: string, mode: number) => Promise<void>;
+  rm: (path: string, options?: { force?: boolean }) => Promise<void>;
+};
+
+export async function replaceBinaryFile(input: {
+  sourcePath: string;
+  targetPath: string;
+  platform?: NodeJS.Platform;
+  ops?: ReplaceBinaryOps;
+}): Promise<{ backupCleanupDeferred: boolean }> {
+  const targetPlatform = input.platform ?? process.platform;
+  const ops: ReplaceBinaryOps = input.ops ?? { rename, copyFile, chmod, rm };
+  const backupPath = `${input.targetPath}.bak`;
+
+  // Rename current -> backup, copy new -> current, remove backup.
+  // On Windows, a running .exe can be renamed, but the renamed .bak cannot be
+  // deleted until this process exits; defer cleanup to the next CLI invocation.
+  await ops.rename(input.targetPath, backupPath);
+  try {
+    await ops.copyFile(input.sourcePath, input.targetPath);
+    if (targetPlatform !== "win32") {
+      await ops.chmod(input.targetPath, 0o755);
+    }
+  } catch (err) {
+    // Restore backup on copy/chmod failure so the binary is never left missing.
+    try {
+      await ops.rename(backupPath, input.targetPath);
+    } catch {
+      // ignore restore failure
+    }
+    throw err;
+  }
+
+  try {
+    await ops.rm(backupPath, { force: true });
+    return { backupCleanupDeferred: false };
+  } catch (err) {
+    if (targetPlatform === "win32") {
+      return { backupCleanupDeferred: true };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Best-effort cleanup of a stale `.bak` binary left behind by a previous
+ * Windows self-update. Fire-and-forget; never throws.
+ */
+export function cleanupStaleBackupBinary(
+  execPath: string = process.execPath,
+  targetPlatform: NodeJS.Platform = process.platform,
+): void {
+  if (targetPlatform !== "win32") {
+    return;
+  }
+  const execName = executableBaseName(execPath);
+  if (["bun", "bun.exe", "node", "nodejs", "node.exe"].includes(execName)) {
+    return;
+  }
+  void rm(`${execPath}.bak`, { force: true }).catch(() => {});
 }
 
 /**
@@ -248,24 +318,10 @@ export async function performUpdate(
     }
 
     // Replace current binary
-    const currentBin = process.execPath;
-    const backupPath = `${currentBin}.bak`;
-
-    // Rename current -> backup, copy new -> current, remove backup
-    await rename(currentBin, backupPath);
-    try {
-      await copyFile(binTmp, currentBin);
-      await chmod(currentBin, 0o755);
-      await rm(backupPath, { force: true });
-    } catch (err) {
-      // Restore backup on failure
-      try {
-        await rename(backupPath, currentBin);
-      } catch {
-        // ignore restore failure
-      }
-      throw err;
-    }
+    await replaceBinaryFile({
+      sourcePath: binTmp,
+      targetPath: process.execPath,
+    });
 
     return { success: true, message: `Updated agent-slack to ${latest}` };
   } finally {
