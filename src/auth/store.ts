@@ -7,6 +7,7 @@ import {
   hydrateWindowsDpapiCredentials,
   sealWindowsDpapiCredentials,
 } from "./windows-credential-store.ts";
+import { isRecord } from "../lib/object-type-guards.ts";
 import { platform } from "node:os";
 
 export {
@@ -38,6 +39,11 @@ export async function loadCredentials(): Promise<Credentials> {
   const fromFile = await readJsonFile<unknown>(CREDENTIALS_FILE);
   const parsed = CredentialsSchema.safeParse(fromFile ?? { version: 1, workspaces: [] });
   if (!parsed.success) {
+    if (IS_WIN32 && isRecord(fromFile) && fromFile.dpapi_secrets !== undefined) {
+      throw new Error(
+        `Windows credentials file "${CREDENTIALS_FILE}" has a malformed DPAPI envelope; refusing to overwrite it. Delete the file and re-run "agent-slack auth import-desktop".`,
+      );
+    }
     return { version: 1, workspaces: [] };
   }
 

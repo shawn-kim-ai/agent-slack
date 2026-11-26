@@ -16,6 +16,7 @@ const DEFAULT_DPAPI_OPS: DpapiStoreOps = {
 };
 
 type DpapiSecretBag = {
+  xoxd?: string;
   xoxd_by_workspace: Record<string, string>;
   xoxc: Record<string, string>;
   token: Record<string, string>;
@@ -49,6 +50,7 @@ function parseDpapiSecretBag(raw: Buffer): DpapiSecretBag | null {
       return null;
     }
     return {
+      xoxd: typeof parsed.xoxd === "string" ? parsed.xoxd : undefined,
       xoxd_by_workspace: extractStringRecord(parsed.xoxd_by_workspace),
       xoxc: extractStringRecord(parsed.xoxc),
       token: extractStringRecord(parsed.token),
@@ -107,7 +109,9 @@ export function hydrateWindowsDpapiCredentials(
     if (w.auth.auth_type === "browser") {
       const xoxc = w.auth.xoxc_token === DPAPI_PLACEHOLDER ? bag.xoxc[url] : w.auth.xoxc_token;
       const xoxd =
-        w.auth.xoxd_cookie === DPAPI_PLACEHOLDER ? bag.xoxd_by_workspace[url] : w.auth.xoxd_cookie;
+        w.auth.xoxd_cookie === DPAPI_PLACEHOLDER
+          ? (bag.xoxd_by_workspace[url] ?? bag.xoxd)
+          : w.auth.xoxd_cookie;
       return {
         ...w,
         auth: {

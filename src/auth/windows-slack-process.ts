@@ -34,11 +34,10 @@ function defaultIsSlackRunning(): boolean {
     script: `@(${CURRENT_SESSION_SLACK_EXPR}).Count`,
     timeoutMs: DEFAULT_SLACK_STOP_TIMEOUT_MS,
   });
-  const count = Number(out);
-  if (!Number.isFinite(count)) {
+  if (!/^\d+$/.test(out)) {
     throw new Error(`Unexpected PowerShell Slack process count: "${out}"`);
   }
-  return count > 0;
+  return Number(out) > 0;
 }
 
 function defaultStopSlack(): void {

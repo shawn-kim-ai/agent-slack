@@ -23,7 +23,7 @@ This document captures the architecture, trade-offs, and phased implementation p
 ### 1.2 Slack Desktop Extraction & DPAPI Hardening (`src/auth/desktop.ts`, `src/auth/desktop-crypto.ts`, `src/cli/auth-command.ts`)
 
 - **DPAPI without plaintext temp files**:
-  - Replace temporary key files in `tmpdir()` with PowerShell stdin/stdout base64 transport (`-NoProfile -NonInteractive -ExecutionPolicy Bypass` + timeout). Decrypted AES keys never touch disk.
+  - Replace temporary key files in `tmpdir()` with PowerShell stdin/stdout base64 transport (`-NoProfile -NonInteractive`, resolved from `System32`, with `$ErrorActionPreference = 'Stop'` and 10s timeout). Decrypted AES keys never touch disk.
   - Electron `safeStorage` on Windows continues to use DPAPI (`Local State` → `os_crypt.encrypted_key`), so Slack Desktop extraction remains reliable.
 - **Locked Cookies DB handling**:
   - When Slack Desktop holds an exclusive lock on `Network/Cookies` (`EBUSY` / `EPERM` / `EACCES`), emit a clear message instructing the user to fully quit Slack (including the system tray icon) or re-run with `--restart-slack`. Copies `-wal`/`-shm`/`-journal` SQLite sidecars alongside `Cookies`.
@@ -39,7 +39,7 @@ This document captures the architecture, trade-offs, and phased implementation p
 - **Bun detection**: Check both `bun` and `bun.exe` (case-insensitive) in `detectInstallMethod()`.
 - **Locked `.exe` replacement**: Windows allows renaming a running `.exe` (`currentBin` → `currentBin.bak`) and copying the new binary into `currentBin`, but removing `.bak` fails with `EPERM`/`EBUSY` until the process exits.
   - On `win32`, treat `rm(backupPath)` failure after `copyFile` as non-fatal instead of rolling back the update.
-  - On CLI startup (`src/index.ts`), run a fire-and-forget best-effort cleanup of `${process.execPath}.bak` on `win32`.
+  - On CLI startup (`src/index.ts`), synchronously remove `${process.execPath}.bak` on `win32` if present (best-effort; ignores lock errors).
 
 ## Phase 2: CI & Release Build Stability
 
